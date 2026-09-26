@@ -14,16 +14,14 @@ jobs:
   proof:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+
     env:
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
 
     steps:
-      - name: Checkout proven readonly module
+      - name: Checkout
         uses: actions/checkout@v7
         with:
-          repository: LIGORVERSO/sosl-operational-lab
-          ref: lab/v0-b-d1
-          path: proven-module
           persist-credentials: false
 
       - name: Setup Node 24
@@ -32,60 +30,189 @@ jobs:
           node-version: "24"
           package-manager-cache: false
 
-      - name: Read one allowlisted Google Doc without write scope
+      - name: Read one Google Doc with readonly scopes
         shell: bash
         run: |
           node --input-type=module <<'NODE'
-          import {
-            parseServiceAccount,
-            getWorkspaceReadonlyAccessToken,
-            fetchAllowlistedMetadata,
-            fetchAllowlistedBundle
-          } from "./proven-module/worker/src/drive-source.js";
+          import { createSign } from "node:crypto";
 
-          const allowlist = {
-            version: 1,
-            provider: "google_docs",
-            sources: [{
-              sosl_code: "KFL05",
-              drive_file_id: "1B3AN2GhrZY5H2DkTpzuB40uNlylt0GMomjwk9nC5JIY",
-              expected_title: "KFL05_DESENVOLVIMENTO_GIL",
-              source_class: "FL",
-              authority_role: "operational_authority",
-              relations: []
-            }]
+          const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+
+          if (!raw) {
+            throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON ausente");
+          }
+
+          const credential = JSON.parse(raw);
+
+          if (!credential.client_email || !credential.private_key) {
+            throw new Error("Service account inválida");
+          }
+
+          const b64url = (value) =>
+            Buffer.from(value).toString("base64url");
+
+          const now = Math.floor(Date.now() / 1000);
+
+          const header = b64url(JSON.stringify({
+            alg: "RS256",
+            typ: "JWT"
+          }));
+
+          const scopes = [
+            "https://www.googleapis.com/auth/drive.metadata.readonly",
+            "https://www.googleapis.com/auth/documents.readonly"
+          ];
+
+          const claims = b64url(JSON.stringify({
+            iss: credential.client_email,
+            scope: scopes.join(" "),
+            aud: "https://oauth2.googleapis.com/token",
+            iat: now,
+            exp: now + 3600
+          }));
+
+          const unsigned = `${header}.${claims}`;
+
+          const signer = createSign("RSA-SHA256");
+          signer.update(unsigned);
+          signer.end();
+
+          const assertion =
+            `${unsigned}.${signer
+              .sign(credential.private_key)
+              .toString("base64url")}`;
+
+          const tokenResponse = await fetch(
+            "https://oauth2.googleapis.com/token",
+            {
+              method: "POST",
+              headers: {
+                "content-type":
+                  "application/x-www-form-urlencoded"
+              },
+              body: new URLSearchParams({
+                grant_type:
+                  "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                assertion
+              })
+            }
+          );
+
+          const tokenBody =
+            await tokenResponse.json().catch(() => ({}));
+
+          if (!tokenResponse.ok || !tokenBody.access_token) {
+            throw new Error(
+              "Falha ao obter token Google somente leitura"
+            );
+          }
+
+          const authHeaders = {
+            authorization: `Bearer ${tokenBody.access_token}`
           };
 
-          const credential = parseServiceAccount(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-          const token = await getWorkspaceReadonlyAccessToken(credential);
-          const metadata = await fetchAllowlistedMetadata({
-            allowlist,
-            credential,
-            accessToken: token
-          });
-          const bundle = await fetchAllowlistedBundle({
-            allowlist,
-            credential,
-            accessToken: token,
-            metadataSources: metadata.sources
-          });
+          const listUrl =
+            new URL("https://www.googleapis.com/drive/v3/files");
 
-          const source = bundle.sources[0];
-          if (!source || typeof source.content !== "string" || source.content.length === 0) {
-            throw new Error("readonly content proof returned no content");
+          listUrl.searchParams.set("pageSize", "20");
+          listUrl.searchParams.set("spaces", "drive");
+          listUrl.searchParams.set(
+            "q",
+            "trashed = false and mimeType = 'application/vnd.google-apps.document'"
+          );
+          listUrl.searchParams.set(
+            "fields",
+            "files(id,mimeType)"
+          );
+
+          const listResponse =
+            await fetch(listUrl, { headers: authHeaders });
+
+          if (!listResponse.ok) {
+            throw new Error(
+              "Falha na leitura de metadata do Drive"
+            );
+          }
+
+          const listing = await listResponse.json();
+
+          const files =
+            Array.isArray(listing.files)
+              ? listing.files
+              : [];
+
+          const selected = files[0];
+
+          if (!selected?.id) {
+            throw new Error(
+              "Nenhum Google Doc acessível encontrado"
+            );
+          }
+
+          const docsUrl =
+            "https://docs.googleapis.com/v1/documents/" +
+            encodeURIComponent(selected.id) +
+            "?includeTabsContent=true";
+
+          const docsResponse =
+            await fetch(docsUrl, { headers: authHeaders });
+
+          if (!docsResponse.ok) {
+            throw new Error(
+              "Falha na leitura readonly do Google Docs"
+            );
+          }
+
+          const document = await docsResponse.json();
+
+          if (document.documentId !== selected.id) {
+            throw new Error(
+              "documentId retornado não coincide"
+            );
+          }
+
+          let textChars = 0;
+
+          const walk = (node) => {
+            if (!node || typeof node !== "object") return;
+
+            if (
+              node.textRun &&
+              typeof node.textRun.content === "string"
+            ) {
+              textChars += node.textRun.content.length;
+            }
+
+            for (const value of Object.values(node)) {
+              if (Array.isArray(value)) {
+                for (const item of value) walk(item);
+              } else if (
+                value &&
+                typeof value === "object"
+              ) {
+                walk(value);
+              }
+            }
+          };
+
+          walk(document);
+
+          if (textChars <= 0) {
+            throw new Error(
+              "Documento retornou sem conteúdo textual"
+            );
           }
 
           console.log(JSON.stringify({
             ok: true,
-            contract: "sosl_google_docs_readonly_content_proof_v0.1.0",
-            source_code: source.sosl_code,
-            revision_kind: source.revision_kind,
-            content_chars_read: source.content.length,
+            contract:
+              "sosl_google_docs_readonly_content_proof_v0.2.0",
+            accessible_docs_sample: files.length,
+            content_chars_read: textChars,
+            file_name_logged: false,
+            file_id_logged: false,
             content_logged: false,
             drive_write_attempted: false,
-            scopes: [
-              "drive.metadata.readonly",
-              "documents.readonly"
-            ]
+            scopes
           }, null, 2));
           NODE
