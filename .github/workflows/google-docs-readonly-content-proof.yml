@@ -35,6 +35,7 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import { createSign } from "node:crypto";
+          import { discoverExecutionPlan } from "./src/control-discovery.mjs";
           import { proveDocumentToSqlite } from "./src/docs-to-sqlite-probe.mjs";
 
           const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
@@ -59,9 +60,10 @@ jobs:
             typ: "JWT"
           }));
 
-          const scopes = [
+                    const scopes = [
             "https://www.googleapis.com/auth/drive.metadata.readonly",
-            "https://www.googleapis.com/auth/documents.readonly"
+            "https://www.googleapis.com/auth/documents.readonly",
+            "https://www.googleapis.com/auth/spreadsheets.readonly"
           ];
 
           const claims = b64url(JSON.stringify({
@@ -111,6 +113,29 @@ jobs:
           const authHeaders = {
             authorization: `Bearer ${tokenBody.access_token}`
           };
+                    const executionPlan =
+            await discoverExecutionPlan(tokenBody.access_token);
+
+          console.log(JSON.stringify({
+            stage: "control_discovery",
+            contract: executionPlan.contract,
+            dispatch_enabled:
+              executionPlan.control.dispatch_enabled,
+            active_executor:
+              executionPlan.control.active_executor,
+            database_count:
+              executionPlan.databases.length,
+            databases:
+              executionPlan.databases.map(db => ({
+                database_id: db.database_id,
+                manifest_version: db.manifest_version,
+                snapshot_status: db.snapshot_status,
+                eligible_source_count:
+                  db.eligible_source_count,
+                source_count_total:
+                  db.source_count_total
+              }))
+          }, null, 2));
 
           const listUrl =
             new URL("https://www.googleapis.com/drive/v3/files");
