@@ -68,13 +68,42 @@ async function sheetValues(
   return body.values ?? [];
 }
 
-function eligibleSource(row) {
-  return (
-    String(row.desired_presence) === "PRESENT" &&
-    String(row.state) === "ACTIVE" &&
-    String(row.body_present) === "1" &&
-    String(row.estado_sync) === "OK"
-  );
+function classifySource(row) {
+  const desired = String(row.desired_presence ?? "");
+  const state = String(row.state ?? "");
+  const body = String(row.body_present ?? "");
+  const sync = String(row.estado_sync ?? "");
+  const name = String(row.nome_drive ?? "");
+
+  if (
+    desired === "PRESENT" &&
+    state === "ACTIVE" &&
+    body === "1" &&
+    sync === "OK"
+  ) return "OPERATIONAL";
+
+  if (
+    desired === "PRESENT" &&
+    state === "INACTIVE" &&
+    body === "1" &&
+    sync === "CONGELADO_OK"
+  ) return "FROZEN_TEST";
+
+  if (
+    desired === "ABSENT" &&
+    state === "INACTIVE" &&
+    body === "1" &&
+    sync === "RETIRADA_PENDENTE_CORPO" &&
+    name.startsWith("ARQ_")
+  ) return "ARCHIVED_RETIREMENT_AUTHORIZED";
+
+  if (
+    String(row.codigo_logico) === "KRG1" &&
+    desired === "ABSENT" &&
+    body === "0"
+  ) return "CONTROL_PLANE_EXTERNAL";
+
+  return "NON_OPERATIONAL";
 }
 
 export async function discoverExecutionPlan(
