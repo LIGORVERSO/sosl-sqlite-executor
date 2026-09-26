@@ -1,0 +1,10 @@
+{
+  "name": "sosl-sqlite-executor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "description": "Public technical executor probe for SOSL SQLite. No canonical content or secrets."
+}
