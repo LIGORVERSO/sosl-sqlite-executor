@@ -1,0 +1,81 @@
+name: Live TESTV2I01 local update proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Download current snapshot readonly
+        shell: bash
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { createSign } from "node:crypto";
+          import { writeFile } from "node:fs/promises";
+          const c = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+          const b64 = value => Buffer.from(value).toString("base64url");
+          const now = Math.floor(Date.now()/1000);
+          const h = b64(JSON.stringify({alg:"RS256",typ:"JWT"}));
+          const cl = b64(JSON.stringify({
+            iss:c.client_email,
+            scope:"https://www.googleapis.com/auth/drive.readonly",
+            aud:"https://oauth2.googleapis.com/token",
+            iat:now,
+            exp:now+3600
+          }));
+          const u = `${h}.${cl}`;
+          const s = createSign("RSA-SHA256");
+          s.update(u); s.end();
+          const a = `${u}.${s.sign(c.private_key).toString("base64url")}`;
+          const tr = await fetch("https://oauth2.googleapis.com/token", {
+            method:"POST",
+            headers:{"content-type":"application/x-www-form-urlencoded"},
+            body:new URLSearchParams({
+              grant_type:"urn:ietf:params:oauth:grant-type:jwt-bearer",
+              assertion:a
+            })
+          });
+          const tb = await tr.json();
+          if (!tr.ok || !tb.access_token) throw new Error("token failed");
+          const r = await fetch(
+            "https://www.googleapis.com/drive/v3/files/1b5ecjJH1r0Johag1f25GjxJrJLUyn1HF?alt=media",
+            {headers:{authorization:`Bearer ${tb.access_token}`}}
+          );
+          if (!r.ok) throw new Error("snapshot download failed: " + r.status);
+          await writeFile("snapshot-bundle.zip", new Uint8Array(await r.arrayBuffer()));
+          NODE
+
+      - name: Unpack snapshot
+        shell: bash
+        run: |
+          mkdir -p work/outer work/inner
+          unzip -q snapshot-bundle.zip -d work/outer
+          unzip -q work/outer/GIL_SQLITE_SNAPSHOT_CURRENT.zip -d work/inner
+          DB="$(find work/inner -type f \( -name '*.db' -o -name '*.sqlite' \) | head -n 1)"
+          test -n "$DB"
+          cp "$DB" work/live-proof.db
+          echo "SOSL_TEST_SQLITE=$PWD/work/live-proof.db" >> "$GITHUB_ENV"
+
+      - name: Read live fixture and apply local delta
+        shell: bash
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          node scripts/live-testv2i01-local-update.mjs
