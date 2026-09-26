@@ -204,12 +204,10 @@ jobs:
             );
           }
           const sqliteProof = proveDocumentToSqlite(document);
-
-console.log(JSON.stringify({
-  stage: "docs_to_sqlite_local",
-  ...sqliteProof
-}, null, 2));
-
+          console.log(JSON.stringify({
+            stage: "docs_to_sqlite_local",
+            ...sqliteProof
+          }, null, 2));
           console.log(JSON.stringify({
             ok: true,
             contract:
