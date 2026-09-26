@@ -1,0 +1,90 @@
+name: Local V2 updater regression
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Download current snapshot readonly
+        shell: bash
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { createSign } from "node:crypto";
+          import { writeFile } from "node:fs/promises";
+
+          const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+          if (!raw) throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON ausente");
+          const credential = JSON.parse(raw);
+          const b64url = value => Buffer.from(value).toString("base64url");
+          const now = Math.floor(Date.now() / 1000);
+          const header = b64url(JSON.stringify({alg:"RS256",typ:"JWT"}));
+          const claims = b64url(JSON.stringify({
+            iss: credential.client_email,
+            scope: "https://www.googleapis.com/auth/drive.readonly",
+            aud: "https://oauth2.googleapis.com/token",
+            iat: now,
+            exp: now + 3600
+          }));
+          const unsigned = `${header}.${claims}`;
+          const signer = createSign("RSA-SHA256");
+          signer.update(unsigned);
+          signer.end();
+          const assertion = `${unsigned}.${signer.sign(credential.private_key).toString("base64url")}`;
+
+          const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+            method:"POST",
+            headers:{"content-type":"application/x-www-form-urlencoded"},
+            body:new URLSearchParams({
+              grant_type:"urn:ietf:params:oauth:grant-type:jwt-bearer",
+              assertion
+            })
+          });
+          const tokenBody = await tokenResponse.json();
+          if (!tokenResponse.ok || !tokenBody.access_token) throw new Error("Falha token readonly");
+
+          const response = await fetch(
+            "https://www.googleapis.com/drive/v3/files/1b5ecjJH1r0Johag1f25GjxJrJLUyn1HF?alt=media",
+            {headers:{authorization:`Bearer ${tokenBody.access_token}`}}
+          );
+          if (!response.ok) throw new Error("Falha download snapshot: " + response.status);
+          const bytes = new Uint8Array(await response.arrayBuffer());
+          await writeFile("snapshot-bundle.zip", bytes);
+          console.log(JSON.stringify({
+            stage:"snapshot_download",
+            bytes:bytes.length,
+            drive_write_attempted:false
+          }));
+          NODE
+
+      - name: Unpack snapshot
+        shell: bash
+        run: |
+          mkdir -p work/outer work/inner
+          unzip -q snapshot-bundle.zip -d work/outer
+          unzip -q work/outer/GIL_SQLITE_SNAPSHOT_CURRENT.zip -d work/inner
+          DB="$(find work/inner -type f \( -name '*.db' -o -name '*.sqlite' \) | head -n 1)"
+          test -n "$DB"
+          echo "SOSL_TEST_SQLITE=$DB" >> "$GITHUB_ENV"
+
+      - name: Run local V2 updater regression
+        shell: bash
+        run: |
+          node test/local-v2-updater.test.mjs
