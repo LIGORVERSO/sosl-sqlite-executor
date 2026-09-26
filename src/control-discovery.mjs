@@ -203,12 +203,50 @@ export async function discoverExecutionPlan(
     const sourceRows =
       rowsToObjects(sourceValues);
 
-    const eligible =
-      sourceRows.filter(eligibleSource);
+    const classified =
+      sourceRows.map(row => ({
+        ...row,
+        execution_class:
+          classifySource(row)
+      }));
+
+    const operational =
+      classified.filter(
+        row =>
+          row.execution_class ===
+          "OPERATIONAL"
+      );
+
+    const frozen =
+      classified.filter(
+        row =>
+          row.execution_class ===
+          "FROZEN_TEST"
+      );
+
+    const retirement =
+      classified.filter(
+        row =>
+          row.execution_class ===
+          "ARCHIVED_RETIREMENT_AUTHORIZED"
+      );
+
+    const controlPlane =
+      classified.filter(
+        row =>
+          row.execution_class ===
+          "CONTROL_PLANE_EXTERNAL"
+      );
 
     plans.push({
       database_id:
         db.database_id,
+
+      snapshot_drive_file_id:
+        db.snapshot_drive_file_id,
+
+      manifest_spreadsheet_id:
+        db.manifest_spreadsheet_id,
 
       publication_mode:
         db.publication_mode,
@@ -228,13 +266,61 @@ export async function discoverExecutionPlan(
         null,
 
       eligible_source_count:
-        eligible.length,
+        operational.length,
+
+      operational_source_count:
+        operational.length,
+
+      frozen_source_count:
+        frozen.length,
+
+      retirement_source_count:
+        retirement.length,
+
+      control_plane_external_count:
+        controlPlane.length,
 
       source_count_total:
         sourceRows.length,
 
-      eligible_sources:
-        eligible.map(row => ({
+      operational_sources:
+        operational.map(row => ({
+          code:
+            row.codigo_logico,
+
+          drive_file_id:
+            row.drive_file_id,
+
+          drive_revision:
+            row.drive_revision
+        })),
+
+      frozen_sources:
+        frozen.map(row => ({
+          code:
+            row.codigo_logico,
+
+          drive_file_id:
+            row.drive_file_id,
+
+          drive_revision:
+            row.drive_revision
+        })),
+
+      retirement_sources:
+        retirement.map(row => ({
+          code:
+            row.codigo_logico,
+
+          drive_file_id:
+            row.drive_file_id,
+
+          drive_revision:
+            row.drive_revision
+        })),
+
+      control_plane_external:
+        controlPlane.map(row => ({
           code:
             row.codigo_logico,
 
