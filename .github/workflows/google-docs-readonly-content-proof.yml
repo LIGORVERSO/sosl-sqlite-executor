@@ -1,0 +1,91 @@
+name: Google Docs readonly content proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sosl-google-docs-readonly-content-proof
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
+    steps:
+      - name: Checkout proven readonly module
+        uses: actions/checkout@v7
+        with:
+          repository: LIGORVERSO/sosl-operational-lab
+          ref: lab/v0-b-d1
+          path: proven-module
+          persist-credentials: false
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Read one allowlisted Google Doc without write scope
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import {
+            parseServiceAccount,
+            getWorkspaceReadonlyAccessToken,
+            fetchAllowlistedMetadata,
+            fetchAllowlistedBundle
+          } from "./proven-module/worker/src/drive-source.js";
+
+          const allowlist = {
+            version: 1,
+            provider: "google_docs",
+            sources: [{
+              sosl_code: "KFL05",
+              drive_file_id: "1B3AN2GhrZY5H2DkTpzuB40uNlylt0GMomjwk9nC5JIY",
+              expected_title: "KFL05_DESENVOLVIMENTO_GIL",
+              source_class: "FL",
+              authority_role: "operational_authority",
+              relations: []
+            }]
+          };
+
+          const credential = parseServiceAccount(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+          const token = await getWorkspaceReadonlyAccessToken(credential);
+          const metadata = await fetchAllowlistedMetadata({
+            allowlist,
+            credential,
+            accessToken: token
+          });
+          const bundle = await fetchAllowlistedBundle({
+            allowlist,
+            credential,
+            accessToken: token,
+            metadataSources: metadata.sources
+          });
+
+          const source = bundle.sources[0];
+          if (!source || typeof source.content !== "string" || source.content.length === 0) {
+            throw new Error("readonly content proof returned no content");
+          }
+
+          console.log(JSON.stringify({
+            ok: true,
+            contract: "sosl_google_docs_readonly_content_proof_v0.1.0",
+            source_code: source.sosl_code,
+            revision_kind: source.revision_kind,
+            content_chars_read: source.content.length,
+            content_logged: false,
+            drive_write_attempted: false,
+            scopes: [
+              "drive.metadata.readonly",
+              "documents.readonly"
+            ]
+          }, null, 2));
+          NODE
