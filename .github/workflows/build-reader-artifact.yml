@@ -1,0 +1,71 @@
+name: Build reusable local Reader artifact
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/local-reader.mjs"
+      - "src/reader-contract.mjs"
+      - "scripts/read-context-local.mjs"
+      - "docs/local-reader-contract.md"
+      - ".github/workflows/build-reader-artifact.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Assemble reusable Reader package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/GIL_READER_LOCAL_CURRENT/src dist/GIL_READER_LOCAL_CURRENT/scripts dist/GIL_READER_LOCAL_CURRENT/docs
+          cp src/local-reader.mjs dist/GIL_READER_LOCAL_CURRENT/src/
+          cp src/reader-contract.mjs dist/GIL_READER_LOCAL_CURRENT/src/
+          cp scripts/read-context-local.mjs dist/GIL_READER_LOCAL_CURRENT/scripts/
+          cp docs/local-reader-contract.md dist/GIL_READER_LOCAL_CURRENT/docs/
+          cat > dist/GIL_READER_LOCAL_CURRENT/package.json <<'JSON'
+          {
+            "name": "gil-reader-local",
+            "private": true,
+            "type": "module",
+            "engines": {"node": ">=24"},
+            "scripts": {
+              "read": "node scripts/read-context-local.mjs"
+            }
+          }
+          JSON
+          cat > dist/GIL_READER_LOCAL_CURRENT/reader-manifest.json <<'JSON'
+          {
+            "artifact_contract": "sosl_reusable_reader_artifact_v1",
+            "reader_contract": "unified_context_v1",
+            "runtime": "node>=24",
+            "binding_policy": {
+              "database_version": false,
+              "snapshot_version": false,
+              "snapshot_hash": false,
+              "database_id": false,
+              "drive_file_id": false
+            },
+            "compatibility_policy": "capability_probe"
+          }
+          JSON
+          cd dist
+          zip -qr GIL_READER_LOCAL_CURRENT.zip GIL_READER_LOCAL_CURRENT
+          sha256sum GIL_READER_LOCAL_CURRENT.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GIL_READER_LOCAL_CURRENT
+          path: dist/GIL_READER_LOCAL_CURRENT.zip
+          if-no-files-found: error
+          retention-days: 7
