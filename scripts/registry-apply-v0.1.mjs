@@ -3,6 +3,7 @@ import { discoverExecutionPlan } from "../src/control-discovery.mjs";
 import { compileCorpusRegistryIntent } from "../src/corpus-registry.js";
 import { planCorpusReconciliation } from "../src/corpus-reconciler.js";
 import { applyCorpusRegistryPlanLocal } from "../src/local-registry-apply.mjs";
+import { applyKrg1ControlPlaneLocal, readKrg1DerivedControlState } from "../src/krg1-control-plane-local.mjs";
 import {
   googleAccessTokenFromServiceAccountJson,
   readSheetValues,
@@ -49,19 +50,25 @@ const executionPlan=await discoverExecutionPlan(token);
 const database=executionPlan.databases.find(x=>x.database_id===databaseId);
 if(!database?.registry_spreadsheet_id) throw new Error("registry spreadsheet unavailable");
 
-const registryMeta=await driveFileMeta(database.registry_spreadsheet_id,token);
-const [identityValues,provisionalValues]=await Promise.all([
+const registryMetaBefore=await driveFileMeta(database.registry_spreadsheet_id,token);
+const [identityValues,provisionalValues,relationValues]=await Promise.all([
   readSheetValues(database.registry_spreadsheet_id,"IDENTIDADES!A1:T999",token),
-  readSheetValues(database.registry_spreadsheet_id,"SUPORTES_PROVISORIOS!A1:R999",token)
+  readSheetValues(database.registry_spreadsheet_id,"SUPORTES_PROVISORIOS!A1:R999",token),
+  readSheetValues(database.registry_spreadsheet_id,"RELACOES!A1:G999",token)
 ]);
+const registryMetaAfter=await driveFileMeta(database.registry_spreadsheet_id,token);
+if(String(registryMetaBefore.version)!==String(registryMetaAfter.version)){
+  throw new Error("KRG1_CHANGED_DURING_STRUCTURED_READ");
+}
+const revision="drive-version:"+String(registryMetaAfter.version);
+const identityTab={title:"IDENTIDADES",rows:sheetRows(identityValues)};
+const provisionalTab={title:"SUPORTES_PROVISORIOS",rows:sheetRows(provisionalValues)};
+const relationTab={title:"RELACOES",rows:sheetRows(relationValues)};
 const intent=compileCorpusRegistryIntent({
   sources:[{
     sosl_code:"KRG1",
-    revision:"drive-version:"+String(registryMeta.version),
-    tabs:[
-      {title:"IDENTIDADES",rows:sheetRows(identityValues)},
-      {title:"SUPORTES_PROVISORIOS",rows:sheetRows(provisionalValues)}
-    ]
+    revision,
+    tabs:[identityTab,provisionalTab,relationTab]
   }]
 });
 if(intent.invalid_commands.length){
@@ -144,6 +151,21 @@ if(before.diagnostics.length){
   throw new Error("REGISTRY_DIAGNOSTICS_BLOCK_APPLY "+JSON.stringify(before.diagnostics));
 }
 const applied=applyCorpusRegistryPlanLocal({dbPath,reconciliation:before});
+const controlPlane=applyKrg1ControlPlaneLocal({
+  dbPath,
+  intent,
+  identityTab,
+  relationTab,
+  revision
+});
+const controlState=readKrg1DerivedControlState({dbPath});
+if(
+  !controlState ||
+  String(controlState.processed_revision)!==revision ||
+  String(controlState.status)!=="verified_live_derived_control"
+){
+  throw new Error("KRG1_DERIVED_CONTROL_STATE_READBACK_FAILED");
+}
 const after=await buildPlan();
 const nonNoop=after.actions.filter(x=>x.kind!=="NOOP");
 if(after.diagnostics.length||nonNoop.length){
@@ -158,6 +180,14 @@ console.log(JSON.stringify({
   database_id:databaseId,
   krg1_revision:intent.krg1_revision,
   intent_entries:intent.entries.length,
+  control_plane:controlPlane,
+  control_state:{
+    processed_revision:String(controlState.processed_revision),
+    semantic_hash:String(controlState.semantic_hash),
+    status:String(controlState.status),
+    identity_count:Number(controlState.identity_count),
+    relation_count:Number(controlState.relation_count)
+  },
   before_action_counts:counts(before.actions),
   applied,
   after_action_counts:counts(after.actions),
