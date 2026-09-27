@@ -1,0 +1,113 @@
+name: First real SQLite cutover
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/first-real-cutover.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sosl-first-real-cutover
+  cancel-in-progress: false
+
+jobs:
+  cutover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      SOSL_DATABASE_ID: gil-main
+      SOSL_TRIGGER_REASON: REGISTRY_CHANGED,SOURCE_CHANGED,FIRST_REAL_CUTOVER
+      SOSL_BODY_SYNC_REPORT: work/body-sync-report.json
+      SOSL_MANIFEST_REPORT: work/manifest-report.json
+      SOSL_BUNDLE_PATH: work/GIL_SQLITE_SNAPSHOT_CURRENT.next.zip
+      SOSL_BUILD_REPORT: work/build-report.json
+      SOSL_PUBLISH_REPORT: work/publish-report.json
+      SOSL_PUBLISH_MODE: COMMIT
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Download stable snapshot readonly with pinned base version
+        run: |
+          mkdir -p work/outer work/inner
+          SOSL_SNAPSHOT_DOWNLOAD_PATH=work/snapshot-bundle.zip node scripts/download-stable-snapshot.mjs
+          unzip -q work/snapshot-bundle.zip -d work/outer
+          unzip -q work/outer/GIL_SQLITE_SNAPSHOT_CURRENT.zip -d work/inner
+          DB="$(find work/inner -type f \( -name '*.db' -o -name '*.sqlite' \) | head -n 1)"
+          test -n "$DB"
+          cp "$DB" work/cutover.db
+          echo "SOSL_SQLITE_PATH=$PWD/work/cutover.db" >> "$GITHUB_ENV"
+
+      - name: Apply one-time first-cutover sanitation
+        run: python3 scripts/local_snapshot_sanitizer.py apply --db "$SOSL_SQLITE_PATH"
+
+      - name: Reconcile live KRG1 membership and derived control
+        run: node scripts/registry-apply-v0.1.mjs
+
+      - name: Advance retirement guards
+        run: node scripts/retirement-reconcile-local.mjs
+
+      - name: Finalize eligible retirements
+        run: node scripts/retirement-finalize-local.mjs
+
+      - name: Materialize and synchronize live PRESENT bodies
+        run: node scripts/body-sync-local.mjs
+
+      - name: Rebuild manifest preview
+        run: node scripts/manifest-preview-v0.1.mjs
+
+      - name: Assert candidate clean before publication
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const m=JSON.parse(await readFile(process.env.SOSL_MANIFEST_REPORT,"utf8"));
+          if(m.has_material_delta || m.has_fatal_state){
+            throw new Error("FIRST_CUTOVER_NOT_CLEAN "+JSON.stringify({
+              sync_counts:m.sync_counts,
+              fatal_states:m.fatal_states
+            }));
+          }
+          console.log("FIRST_CUTOVER_CANDIDATE_CLEAN",JSON.stringify({
+            live_krg1_revision:m.live_krg1_revision,
+            processed_krg1_revision:m.processed_krg1_revision,
+            sync_counts:m.sync_counts
+          }));
+          NODE
+
+      - name: Reader compatibility and portability gate
+        run: node scripts/local-reader-regression.mjs
+
+      - name: Build self-certifying replacement bundle
+        run: |
+          python3 scripts/build_snapshot_bundle.py             --db "$SOSL_SQLITE_PATH"             --report-out "$SOSL_BUILD_REPORT"             --out "$SOSL_BUNDLE_PATH"
+
+      - name: Publish same stable Drive file ID, read back and acknowledge manifest
+        run: node scripts/publish-snapshot-v0.1.mjs
+
+      - name: Verify committed publication
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const r=JSON.parse(await readFile(process.env.SOSL_PUBLISH_REPORT,"utf8"));
+          if(!r.ok || !r.publication_attempted || !r.manifest_write_attempted){
+            throw new Error("FIRST_CUTOVER_PUBLICATION_INCOMPLETE");
+          }
+          console.log("FIRST_REAL_CUTOVER_OK",JSON.stringify({
+            stable_after_version:r.stable_after_version,
+            manifest_snapshot_status:r.manifest_snapshot_status,
+            snapshot_krg1_membership_revision:r.snapshot_krg1_membership_revision,
+            readback_sha256:r.readback_sha256
+          }));
+          NODE
