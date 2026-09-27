@@ -10,7 +10,7 @@ on:
       - "apps-script/observer-v0.2.0/Code.gs"
       - "src/corpus-registry.js"
       - "src/corpus-reconciler.js"
-      - "test/corpus-registry.test.mjs test/retirement-lifecycle.test.mjs"
+      - "test/corpus-registry.test.mjs"
       - "src/corpus-retirement.js"
       - "src/retirement-guard.js"
       - "test/retirement-lifecycle.test.mjs"
@@ -33,4 +33,4 @@ jobs:
           node-version: "24"
           package-manager-cache: false
       - name: Run observer acknowledgement regression
-        run: node --test test/observer-ack-policy.test.mjs test/observer-apps-script-dirty.test.mjs test/corpus-registry.test.mjs
+        run: node --test test/observer-ack-policy.test.mjs test/observer-apps-script-dirty.test.mjs test/corpus-registry.test.mjs test/retirement-lifecycle.test.mjs
