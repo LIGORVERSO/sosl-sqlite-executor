@@ -148,7 +148,14 @@ export async function buildLocalManifest({
   const controlState=readKrg1DerivedControlState({dbPath});
   const rows=[];
   const counts={};
+  const fatalStates=[];
   let hasMaterialDelta=false;
+  const fatalStatusSet=new Set([
+    "ERRO_METADATA","ERRO_TRASHED","ERRO_KRG1_CORPUS_ANCHOR",
+    "ERRO_CONTROLE_DERIVADO_AUSENTE","LEGADO_REVISAR",
+    "NOVO","SEM_CORPO","SEM_REVISAO_PROCESSADA",
+    "CONGELADO_SEM_CORPO","ESTADO_NAO_SUPORTADO"
+  ]);
 
   for(const item of metadata){
     const code=item.code;
@@ -174,6 +181,7 @@ export async function buildLocalManifest({
       processedRevision,controlState
     });
     counts[status]=(counts[status]??0)+1;
+    if(fatalStatusSet.has(status)) fatalStates.push({code,status});
 
     if(isMaterialDelta({
       status,desired,state,body,liveRevision,processedRevision
@@ -242,6 +250,8 @@ export async function buildLocalManifest({
     live_krg1_revision:liveRegistryRevision,
     processed_krg1_revision:processedRegistryRevision,
     sync_counts:counts,
+    fatal_states:fatalStates,
+    has_fatal_state:fatalStates.length>0,
     global_values:globalRows(global),
     source_values:sourceRows(rows)
   };
