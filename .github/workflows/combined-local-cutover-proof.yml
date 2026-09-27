@@ -30,7 +30,7 @@ jobs:
           node-version: "24"
           package-manager-cache: npm
 
-      - run: npm ci
+      - run: npm install --ignore-scripts --no-audit --no-fund
 
       - name: Download current snapshot readonly
         shell: bash
