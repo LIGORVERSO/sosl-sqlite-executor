@@ -26,12 +26,18 @@ concurrency:
 jobs:
   execute:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     env:
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       SOSL_DATABASE_ID: ${{ inputs.database_id }}
       SOSL_OBSERVER_CONTRACT: ${{ inputs.observer_contract }}
       SOSL_TRIGGER_REASON: ${{ inputs.trigger_reason }}
+      SOSL_BODY_SYNC_REPORT: work/body-sync-report.json
+      SOSL_MANIFEST_REPORT: work/manifest-report.json
+      SOSL_BUNDLE_PATH: work/GIL_SQLITE_SNAPSHOT_CURRENT.next.zip
+      SOSL_BUILD_REPORT: work/build-report.json
+      SOSL_PUBLISH_REPORT: work/publish-report.json
+      SOSL_PUBLISH_MODE: COMMIT
 
     steps:
       - name: Checkout
@@ -43,61 +49,75 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24"
-          package-manager-cache: false
 
       - name: Install parser dependencies
-        shell: bash
         run: npm install --ignore-scripts --no-audit --no-fund
 
-      - name: Download current snapshot readonly
-        shell: bash
-        run: |
-          node --input-type=module <<'NODE'
-          import { createSign } from "node:crypto";
-          import { writeFile } from "node:fs/promises";
-          const c=JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-          const b64=v=>Buffer.from(v).toString("base64url");
-          const now=Math.floor(Date.now()/1000);
-          const h=b64(JSON.stringify({alg:"RS256",typ:"JWT"}));
-          const cl=b64(JSON.stringify({
-            iss:c.client_email,
-            scope:"https://www.googleapis.com/auth/drive.readonly",
-            aud:"https://oauth2.googleapis.com/token",
-            iat:now,
-            exp:now+3600
-          }));
-          const u=h+"."+cl;
-          const s=createSign("RSA-SHA256"); s.update(u); s.end();
-          const a=u+"."+s.sign(c.private_key).toString("base64url");
-          const tr=await fetch("https://oauth2.googleapis.com/token",{
-            method:"POST",
-            headers:{"content-type":"application/x-www-form-urlencoded"},
-            body:new URLSearchParams({
-              grant_type:"urn:ietf:params:oauth:grant-type:jwt-bearer",
-              assertion:a
-            })
-          });
-          const tb=await tr.json();
-          if (!tr.ok || !tb.access_token) throw new Error("token failed");
-          const r=await fetch(
-            "https://www.googleapis.com/drive/v3/files/1b5ecjJH1r0Johag1f25GjxJrJLUyn1HF?alt=media",
-            {headers:{authorization:"Bearer "+tb.access_token}}
-          );
-          if (!r.ok) throw new Error("snapshot download failed: "+r.status);
-          await writeFile("snapshot-bundle.zip",new Uint8Array(await r.arrayBuffer()));
-          NODE
+      - name: Enforce live activation control before any Drive mutation
+        run: node scripts/executor-activation-guard.mjs
 
-      - name: Unpack snapshot
+      - name: Download current stable snapshot readonly
         shell: bash
         run: |
           mkdir -p work/outer work/inner
-          unzip -q snapshot-bundle.zip -d work/outer
+          node --input-type=module <<'NODE'
+          import { writeFile } from "node:fs/promises";
+          import { googleAccessTokenFromServiceAccountJson } from "./src/google-readonly.mjs";
+          const token=await googleAccessTokenFromServiceAccountJson(
+            process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
+            ["https://www.googleapis.com/auth/drive.readonly"]
+          );
+          const r=await fetch(
+            "https://www.googleapis.com/drive/v3/files/1b5ecjJH1r0Johag1f25GjxJrJLUyn1HF?alt=media",
+            {headers:{authorization:"Bearer "+token}}
+          );
+          if(!r.ok) throw new Error("snapshot download failed: "+r.status);
+          await writeFile("work/snapshot-bundle.zip",new Uint8Array(await r.arrayBuffer()));
+          NODE
+          unzip -q work/snapshot-bundle.zip -d work/outer
           unzip -q work/outer/GIL_SQLITE_SNAPSHOT_CURRENT.zip -d work/inner
           DB="$(find work/inner -type f \( -name '*.db' -o -name '*.sqlite' \) | head -n 1)"
           test -n "$DB"
           cp "$DB" work/executor.db
           echo "SOSL_SQLITE_PATH=$PWD/work/executor.db" >> "$GITHUB_ENV"
 
-      - name: Apply live deltas locally
-        shell: bash
-        run: node scripts/executor-v0.2.mjs
+      - name: Reconcile KRG1 membership and derived control plane locally
+        run: node scripts/registry-apply-v0.1.mjs
+
+      - name: Advance retirement authorization guards
+        run: node scripts/retirement-reconcile-local.mjs
+
+      - name: Finalize guarded retirements
+        run: node scripts/retirement-finalize-local.mjs
+
+      - name: Materialize new bodies and apply live body deltas
+        run: node scripts/body-sync-local.mjs
+
+      - name: Rebuild manifest preview from live authority
+        run: node scripts/manifest-preview-v0.1.mjs
+
+      - name: Build self-certifying replacement bundle
+        run: |
+          python3 scripts/build_snapshot_bundle.py \
+            --db "$SOSL_SQLITE_PATH" \
+            --report-out "$SOSL_BUILD_REPORT" \
+            --out "$SOSL_BUNDLE_PATH"
+
+      - name: Publish same Drive file ID, read back, then atomically acknowledge manifest
+        run: node scripts/publish-snapshot-v0.1.mjs
+
+      - name: Verify publication report exists
+        run: |
+          test -s "$SOSL_PUBLISH_REPORT"
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const r=JSON.parse(await readFile(process.env.SOSL_PUBLISH_REPORT,"utf8"));
+          if(!r.ok||!r.publication_attempted||!r.manifest_write_attempted){
+            throw new Error("executor publication report incomplete");
+          }
+          console.log("EXECUTOR_PUBLICATION_OK",JSON.stringify({
+            snapshot_version:r.stable_after_version,
+            manifest_status:r.manifest_snapshot_status,
+            krg1_revision:r.snapshot_krg1_membership_revision
+          }));
+          NODE
