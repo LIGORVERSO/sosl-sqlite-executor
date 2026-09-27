@@ -1,0 +1,28 @@
+name: Observer ack policy regression
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/observer-ack-policy.mjs"
+      - "test/observer-ack-policy.test.mjs"
+      - ".github/workflows/observer-ack-policy-test.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Run observer acknowledgement regression
+        run: node --test test/observer-ack-policy.test.mjs
