@@ -1,0 +1,81 @@
+name: Post-cutover registry convergence proof
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/local_snapshot_sanitizer.py"
+      - "scripts/registry-plan-v0.1.mjs"
+      - "src/corpus-registry.js"
+      - "src/corpus-reconciler.js"
+      - ".github/workflows/post-cutover-registry-convergence-proof.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      SOSL_DATABASE_ID: gil-main
+      SOSL_REGISTRY_REPORT: work/registry-report.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Download current snapshot readonly
+        shell: bash
+        run: |
+          mkdir -p work/outer work/inner
+          node --input-type=module <<'NODE'
+          import { writeFile } from "node:fs/promises";
+          import { googleAccessTokenFromServiceAccountJson } from "./src/google-readonly.mjs";
+          const token=await googleAccessTokenFromServiceAccountJson(
+            process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
+            ["https://www.googleapis.com/auth/drive.readonly"]
+          );
+          const r=await fetch(
+            "https://www.googleapis.com/drive/v3/files/1b5ecjJH1r0Johag1f25GjxJrJLUyn1HF?alt=media",
+            {headers:{authorization:"Bearer "+token}}
+          );
+          if(!r.ok) throw new Error("snapshot download failed: "+r.status);
+          await writeFile("work/snapshot-bundle.zip",new Uint8Array(await r.arrayBuffer()));
+          NODE
+          unzip -q work/snapshot-bundle.zip -d work/outer
+          unzip -q work/outer/GIL_SQLITE_SNAPSHOT_CURRENT.zip -d work/inner
+          DB="$(find work/inner -type f \( -name '*.db' -o -name '*.sqlite' \) | head -n 1)"
+          test -n "$DB"
+          echo "SOSL_SQLITE_PATH=$PWD/$DB" >> "$GITHUB_ENV"
+
+      - name: Apply authorized first-cutover sanitation locally
+        run: python3 scripts/local_snapshot_sanitizer.py apply --db "$SOSL_SQLITE_PATH"
+
+      - name: Re-plan live KRG1 after sanitation
+        run: node scripts/registry-plan-v0.1.mjs
+
+      - name: Assert exact registry convergence
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const r=JSON.parse(await readFile(process.env.SOSL_REGISTRY_REPORT,"utf8"));
+          const nonNoop=(r.actions??[]).filter(x=>x.kind!=="NOOP");
+          const diagnostics=r.diagnostics??[];
+          if(r.invalid_commands!==0) throw new Error("invalid KRG1 commands remain");
+          if(nonNoop.length) throw new Error("post-cutover registry is not converged: "+JSON.stringify(nonNoop));
+          if(diagnostics.length) throw new Error("post-cutover diagnostics remain: "+JSON.stringify(diagnostics));
+          if(r.intent_entries!==192) throw new Error("unexpected intent count: "+r.intent_entries);
+          console.log("POST_CUTOVER_REGISTRY_CONVERGED",JSON.stringify({
+            intent_entries:r.intent_entries,
+            noop_actions:(r.actions??[]).length,
+            diagnostics:diagnostics.length
+          }));
+          NODE
