@@ -15,6 +15,10 @@ on:
         description: Aggregated dirty reason
         required: false
         type: string
+      dirty_files_json:
+        description: Observed Drive file IDs and revisions from observer
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -32,6 +36,7 @@ jobs:
       SOSL_DATABASE_ID: ${{ inputs.database_id }}
       SOSL_OBSERVER_CONTRACT: ${{ inputs.observer_contract }}
       SOSL_TRIGGER_REASON: ${{ inputs.trigger_reason }}
+      SOSL_DIRTY_FILES_JSON: ${{ inputs.dirty_files_json }}
       SOSL_BODY_SYNC_REPORT: work/body-sync-report.json
       SOSL_MANIFEST_REPORT: work/manifest-report.json
       SOSL_BUNDLE_PATH: work/GIL_SQLITE_SNAPSHOT_CURRENT.next.zip
