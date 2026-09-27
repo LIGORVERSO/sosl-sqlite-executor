@@ -1,0 +1,42 @@
+name: Recover current published snapshot ACK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/recover-current-snapshot-ack.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      SOSL_DATABASE_ID: gil-main
+      SOSL_CURRENT_BUNDLE_PATH: work/current-bundle.zip
+      SOSL_INNER_ZIP_PATH: work/outer/GIL_SQLITE_SNAPSHOT_CURRENT.zip
+      SOSL_SNAPSHOT_META_PATH: work/outer/GIL_SQLITE_SNAPSHOT_CURRENT.meta.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Download current stable snapshot
+        run: |
+          mkdir -p work/outer work/inner
+          SOSL_SNAPSHOT_DOWNLOAD_PATH="$SOSL_CURRENT_BUNDLE_PATH" node scripts/download-stable-snapshot.mjs
+          unzip -q "$SOSL_CURRENT_BUNDLE_PATH" -d work/outer
+          unzip -q "$SOSL_INNER_ZIP_PATH" -d work/inner
+          DB="$(find work/inner -type f \( -name '*.db' -o -name '*.sqlite' \) | head -n 1)"
+          test -n "$DB"
+          echo "SOSL_SQLITE_PATH=$PWD/$DB" >> "$GITHUB_ENV"
+      - name: Reader gate on actually published bytes
+        run: node scripts/local-reader-regression.mjs
+      - name: Reconcile manifest to identical published bytes
+        run: node scripts/ack-current-snapshot-v0.1.mjs
