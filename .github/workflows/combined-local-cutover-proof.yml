@@ -85,6 +85,12 @@ jobs:
             SELECT COUNT(*) FROM corpus_registry
             WHERE sosl_code IN ('PROV0008','PROV0013','PROV0017','PROV0018','PROV0020')
           """).fetchone()[0]
+          krg1_registry_rows=c.execute("""
+            SELECT COUNT(*) FROM corpus_registry WHERE sosl_code='KRG1'
+          """).fetchone()[0]
+          krg1_identity_rows=c.execute("""
+            SELECT COUNT(*) FROM v2_identity_index WHERE stable_ref='KRG1' AND active=1
+          """).fetchone()[0]
           test_rev=c.execute("""
             SELECT ss.last_processed_revision
             FROM v2_sync_state ss
@@ -101,6 +107,8 @@ jobs:
           assert fk==0, fk
           assert removed==0, removed
           assert archive_registry_rows==0, archive_registry_rows
+          assert krg1_registry_rows==0, krg1_registry_rows
+          assert krg1_identity_rows==1, krg1_identity_rows
           assert test_rev!="drive-version:20", test_rev
           assert test_marker>=1, test_marker
           print("COMBINED_LOCAL_CUTOVER_PROOF_OK",{
@@ -108,6 +116,8 @@ jobs:
             "foreign_keys":fk,
             "removed_sources":removed,
             "archive_registry_rows":archive_registry_rows,
+            "krg1_registry_rows":krg1_registry_rows,
+            "krg1_identity_rows":krg1_identity_rows,
             "test_revision":test_rev,
             "test_marker":test_marker
           })
