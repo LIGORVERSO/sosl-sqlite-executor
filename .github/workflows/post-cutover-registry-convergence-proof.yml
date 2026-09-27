@@ -8,6 +8,7 @@ on:
       - "scripts/registry-plan-v0.1.mjs"
       - "scripts/registry-apply-v0.1.mjs"
       - "src/local-registry-apply.mjs"
+      - "src/krg1-control-plane-local.mjs"
       - "src/corpus-registry.js"
       - "src/corpus-reconciler.js"
       - ".github/workflows/post-cutover-registry-convergence-proof.yml"
@@ -63,6 +64,63 @@ jobs:
 
       - name: Apply live KRG1 membership locally and prove idempotence
         run: node scripts/registry-apply-v0.1.mjs
+
+      - name: Validate externalized KRG1 derived control plane
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, sqlite3
+          db=os.environ["SOSL_SQLITE_PATH"]
+          c=sqlite3.connect(db)
+          state=c.execute("""
+            SELECT processed_revision,status,identity_count,relation_count
+            FROM sosl_derived_control_state
+            WHERE control_key='KRG1_CONTROL_PLANE'
+          """).fetchone()
+          assert state is not None
+          revision,status,identity_count,relation_count=state
+          assert str(revision).startswith("drive-version:")
+          assert status=="verified_live_derived_control"
+          source_anchor=c.execute("""
+            SELECT COUNT(*) FROM v2_source_objects
+            WHERE sosl_code='KRG1' AND active=1
+          """).fetchone()[0]
+          registry_anchor=c.execute("""
+            SELECT COUNT(*) FROM corpus_registry WHERE sosl_code='KRG1'
+          """).fetchone()[0]
+          identity_active=c.execute("""
+            SELECT COUNT(*) FROM v2_identity_index
+            WHERE active=1 AND provenance_locator LIKE 'KRG1:IDENTIDADES:%'
+          """).fetchone()[0]
+          identity_bad_prov=c.execute("""
+            SELECT COUNT(*) FROM v2_identity_index
+            WHERE active=1 AND provenance_locator LIKE 'KRG1:IDENTIDADES:%'
+              AND provenance_source_id IS NOT NULL
+          """).fetchone()[0]
+          relation_active=c.execute("""
+            SELECT COUNT(*) FROM v2_condition_links
+            WHERE active=1 AND relation_class='krg1_registered_relation'
+          """).fetchone()[0]
+          relation_bad_prov=c.execute("""
+            SELECT COUNT(*) FROM v2_condition_links
+            WHERE active=1 AND relation_class='krg1_registered_relation'
+              AND provenance_source_id IS NOT NULL
+          """).fetchone()[0]
+          assert source_anchor==0, source_anchor
+          assert registry_anchor==0, registry_anchor
+          assert identity_active==identity_count, (identity_active,identity_count)
+          assert relation_active==relation_count, (relation_active,relation_count)
+          assert identity_bad_prov==0, identity_bad_prov
+          assert relation_bad_prov==0, relation_bad_prov
+          print("KRG1_DERIVED_CONTROL_PLANE_OK",{
+            "revision":revision,
+            "identities":identity_active,
+            "relations":relation_active,
+            "source_anchor":source_anchor,
+            "registry_anchor":registry_anchor
+          })
+          c.close()
+          PY
 
       - name: Re-plan after apply for independent read-only confirmation
         run: node scripts/registry-plan-v0.1.mjs
