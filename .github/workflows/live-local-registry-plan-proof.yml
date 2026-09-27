@@ -1,0 +1,64 @@
+name: Live local registry plan proof
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/registry-plan-v0.1.mjs"
+      - "src/google-readonly.mjs"
+      - "src/corpus-registry.js"
+      - "src/corpus-reconciler.js"
+      - "src/control-discovery.mjs"
+      - ".github/workflows/live-local-registry-plan-proof.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      SOSL_DATABASE_ID: gil-main
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Download current published snapshot readonly
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { writeFile } from "node:fs/promises";
+          import { googleAccessTokenFromServiceAccountJson } from "./src/google-readonly.mjs";
+          const token=await googleAccessTokenFromServiceAccountJson(
+            process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
+            ["https://www.googleapis.com/auth/drive.readonly"]
+          );
+          const r=await fetch(
+            "https://www.googleapis.com/drive/v3/files/1b5ecjJH1r0Johag1f25GjxJrJLUyn1HF?alt=media",
+            {headers:{authorization:"Bearer "+token}}
+          );
+          if(!r.ok) throw new Error("snapshot download failed: "+r.status);
+          await writeFile("snapshot-bundle.zip",new Uint8Array(await r.arrayBuffer()));
+          NODE
+
+      - name: Unpack snapshot
+        shell: bash
+        run: |
+          mkdir -p work/outer work/inner
+          unzip -q snapshot-bundle.zip -d work/outer
+          unzip -q work/outer/GIL_SQLITE_SNAPSHOT_CURRENT.zip -d work/inner
+          DB="$(find work/inner -type f \( -name '*.db' -o -name '*.sqlite' \) | head -n 1)"
+          test -n "$DB"
+          echo "SOSL_SQLITE_PATH=$PWD/$DB" >> "$GITHUB_ENV"
+
+      - name: Plan KRG1 membership against local SQLite without writes
+        run: node scripts/registry-plan-v0.1.mjs
