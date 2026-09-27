@@ -13,7 +13,9 @@ on:
       - "test/corpus-registry.test.mjs"
       - "src/corpus-retirement.js"
       - "src/retirement-guard.js"
-      - "test/retirement-lifecycle.test.mjs"
+      - "test/retirement-lifecycle.test.mjs test/local-manifest-write.test.mjs"
+      - "src/local-manifest.mjs"
+      - "test/local-manifest-write.test.mjs"
       - ".github/workflows/observer-ack-policy-test.yml"
   workflow_dispatch:
 
