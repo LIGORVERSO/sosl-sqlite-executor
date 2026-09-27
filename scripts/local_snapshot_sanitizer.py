@@ -102,7 +102,7 @@ def detach_v2_krg1(c):
     c.execute("DELETE FROM v2_source_revisions WHERE source_id=?", (sid,))
     c.execute("DELETE FROM v2_sync_state WHERE source_id=?", (sid,))
     c.execute("DELETE FROM v2_source_objects WHERE source_id=?", (sid,))
-    c.execute("""UPDATE corpus_registry SET body_present=0,state='INACTIVE',updated_at=datetime('now')
+    c.execute("""DELETE FROM corpus_registry
       WHERE sosl_code='KRG1' AND desired_presence='ABSENT'""")
 
 def detach_legacy_krg1(c):
@@ -126,6 +126,10 @@ def validate(c):
       WHERE sosl_code IN ('KRG1','PROV0008','PROV0013','PROV0017','PROV0018','PROV0020')""")
     archive_registry_rows = scalar(c, """SELECT COUNT(*) FROM corpus_registry
       WHERE sosl_code IN ('PROV0008','PROV0013','PROV0017','PROV0018','PROV0020')""")
+    krg1_registry_rows = scalar(c, "SELECT COUNT(*) FROM corpus_registry WHERE sosl_code='KRG1'")
+    krg1_identity_rows = scalar(c, "SELECT COUNT(*) FROM v2_identity_index WHERE stable_ref='KRG1' AND active=1")
+    krg1_control_relations = scalar(c, """SELECT COUNT(*) FROM v2_condition_links
+      WHERE active=1 AND (subject_ref='KRG1' OR object_ref='KRG1')""")
     legacy_krg = scalar(c, "SELECT COUNT(*) FROM source_objects WHERE sosl_code='KRG1'")
     fixture = counts(c)["test_fixture_units"]
     fk = len(c.execute("PRAGMA foreign_key_check").fetchall())
@@ -138,6 +142,9 @@ def validate(c):
       **counts(c),
       "removed_sources_remaining": bad,
       "archive_registry_rows_remaining": archive_registry_rows,
+      "krg1_registry_rows_remaining": krg1_registry_rows,
+      "krg1_identity_rows_preserved": krg1_identity_rows,
+      "krg1_control_relations_preserved": krg1_control_relations,
       "legacy_krg_source_remaining": legacy_krg,
       "fixture_units": fixture,
       "foreign_key_violations": fk,
@@ -145,7 +152,7 @@ def validate(c):
       "v2_fts_orphans": v2_fts_orphans,
       "legacy_fts_orphans": legacy_fts_orphans
     }
-    if bad or archive_registry_rows or legacy_krg or fixture<=0 or fk or integrity!="ok" or v2_fts_orphans or legacy_fts_orphans:
+    if bad or archive_registry_rows or krg1_registry_rows or krg1_identity_rows!=1 or krg1_control_relations<=0 or legacy_krg or fixture<=0 or fk or integrity!="ok" or v2_fts_orphans or legacy_fts_orphans:
         raise RuntimeError("POSTVALIDATION_FAILED " + json.dumps(out))
     return out
 
