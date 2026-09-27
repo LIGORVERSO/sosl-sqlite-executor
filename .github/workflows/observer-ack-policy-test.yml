@@ -8,6 +8,7 @@ on:
       - "test/observer-ack-policy.test.mjs"
       - "test/observer-apps-script-dirty.test.mjs"
       - "apps-script/observer-v0.2.0/Code.gs"
+      - "apps-script/observer-v0.2.1/Code.gs"
       - "src/corpus-registry.js"
       - "src/corpus-reconciler.js"
       - "test/corpus-registry.test.mjs"
