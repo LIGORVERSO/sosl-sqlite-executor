@@ -104,8 +104,8 @@ const preview=await buildLocalManifest({
   liveKrg1Revision:liveBefore.revision,
   driveToken:token
 });
-if(preview.has_material_delta){
-  throw new Error("LOCAL_CANDIDATE_NOT_CLEAN_BEFORE_PUBLICATION "+JSON.stringify(preview.sync_counts));
+if(preview.has_fatal_state){
+  throw new Error("LOCAL_CANDIDATE_HAS_FATAL_STATE "+JSON.stringify(preview.fatal_states));
 }
 
 const stableBefore=await driveFileMeta(database.snapshot_drive_file_id,token);
