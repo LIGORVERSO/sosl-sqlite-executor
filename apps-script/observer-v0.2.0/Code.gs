@@ -53,6 +53,12 @@ function sourceClass_(row) {
   const sync=String(row.estado_sync||"");
   if (desired==="PRESENT" && state==="ACTIVE" && body==="1" && sync==="OK") return "OPERATIONAL";
   if (desired==="PRESENT" && state==="INACTIVE" && body==="1" && sync==="CONGELADO_OK") return "FROZEN_TEST";
+  if (
+    desired==="ABSENT" &&
+    state==="INACTIVE" &&
+    body==="1" &&
+    /RETIRADA_PENDENTE_CORPO/i.test(sync)
+  ) return "RETIREMENT_PENDING";
   return "OTHER";
 }
 
@@ -70,7 +76,7 @@ function buildPlan_(control) {
     const rows = manifestRows_(db.manifest_spreadsheet_id);
     const watched = rows.filter(row => {
       const c = sourceClass_(row);
-      return c==="OPERATIONAL" || c==="FROZEN_TEST";
+      return c==="OPERATIONAL" || c==="FROZEN_TEST" || c==="RETIREMENT_PENDING";
     });
     const byFile = {};
     watched.forEach(row => {
@@ -218,7 +224,7 @@ function clearAcknowledged_(state, plan) {
       if (
         drive===expected &&
         processed===expected &&
-        !/DIRTY|ERROR|PENDING/i.test(sync)
+        !/DIRTY|ERROR|PENDING|PENDENTE|RETIRADA/i.test(sync)
       ) {
         delete dirty.files[fileId];
         cleared++;
