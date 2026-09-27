@@ -1,0 +1,63 @@
+name: Observer dirty-set execution proof
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/body-sync-local.mjs"
+      - "apps-script/observer-v0.2.0/Code.gs"
+      - ".github/workflows/executor-v0.2.yml"
+      - ".github/workflows/dirty-set-execution-proof.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      SOSL_DATABASE_ID: gil-main
+      SOSL_TRIGGER_REASON: SOURCE_CHANGED
+      SOSL_DIRTY_FILES_JSON: '[{"file_id":"1P58vwW4L7zytIYRu-Q2Cwcg2yh32EZBY7WC4g7DEnz8","observed_revision":""}]'
+      SOSL_BODY_SYNC_REPORT: work/body-sync-report.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Download stable snapshot readonly
+        run: |
+          mkdir -p work/outer work/inner
+          SOSL_SNAPSHOT_DOWNLOAD_PATH=work/snapshot-bundle.zip node scripts/download-stable-snapshot.mjs
+          unzip -q work/snapshot-bundle.zip -d work/outer
+          unzip -q work/outer/GIL_SQLITE_SNAPSHOT_CURRENT.zip -d work/inner
+          DB="$(find work/inner -type f \( -name '*.db' -o -name '*.sqlite' \) | head -n 1)"
+          test -n "$DB"
+          cp "$DB" work/dirty-set.db
+          echo "SOSL_SQLITE_PATH=$PWD/work/dirty-set.db" >> "$GITHUB_ENV"
+      - name: Apply only observer dirty set
+        run: node scripts/body-sync-local.mjs
+      - name: Assert single-source selection
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const r=JSON.parse(await readFile(process.env.SOSL_BODY_SYNC_REPORT,"utf8"));
+          if(r.selection_mode!=="OBSERVER_DIRTY_SET" || r.target_count!==1 || r.observed_dirty_count!==1){
+            throw new Error("DIRTY_SET_SELECTION_FAILED "+JSON.stringify(r));
+          }
+          if(r.results?.[0]?.code!=="TESTV2I01"){
+            throw new Error("DIRTY_SET_WRONG_TARGET "+JSON.stringify(r.results));
+          }
+          console.log("DIRTY_SET_EXECUTION_OK",JSON.stringify({
+            selection_mode:r.selection_mode,
+            target_count:r.target_count,
+            code:r.results[0].code,
+            mode:r.results[0].mode
+          }));
+          NODE
