@@ -56,6 +56,7 @@ const dbPath=String(process.env.SOSL_SQLITE_PATH||"").trim();
 const bundlePath=String(process.env.SOSL_BUNDLE_PATH||"").trim();
 const buildReportPath=String(process.env.SOSL_BUILD_REPORT||"").trim();
 const reportOut=String(process.env.SOSL_PUBLISH_REPORT||"").trim();
+const expectedBaseVersion=String(process.env.SOSL_BASE_SNAPSHOT_VERSION||"").trim();
 if(!dbPath||!bundlePath||!buildReportPath){
   throw new Error("SOSL_SQLITE_PATH, SOSL_BUNDLE_PATH and SOSL_BUILD_REPORT required");
 }
@@ -109,6 +110,15 @@ if(preview.has_fatal_state){
 }
 
 const stableBefore=await driveFileMeta(database.snapshot_drive_file_id,token);
+if(!expectedBaseVersion){
+  throw new Error("SOSL_BASE_SNAPSHOT_VERSION required");
+}
+if(String(stableBefore.version)!==expectedBaseVersion){
+  throw new Error(
+    "SNAPSHOT_BASE_VERSION_CHANGED expected="+expectedBaseVersion+
+    " actual="+String(stableBefore.version)
+  );
+}
 const baseReport={
   contract:"sosl_snapshot_publisher_v0.1.0",
   mode,
@@ -119,6 +129,7 @@ const baseReport={
   local_package_size_bytes:bytes.length,
   krg1_processed_revision:String(controlState.processed_revision),
   stable_before_version:String(stableBefore.version),
+  expected_base_version:expectedBaseVersion,
   mutation_attempted:false
 };
 
