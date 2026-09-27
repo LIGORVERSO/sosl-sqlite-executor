@@ -104,6 +104,9 @@ jobs:
           }));
           NODE
 
+      - name: Reader compatibility gate
+        run: node scripts/local-reader-regression.mjs
+
       - name: Build publishable self-certifying bundle without publishing
         run: |
           python3 scripts/build_snapshot_bundle.py \
