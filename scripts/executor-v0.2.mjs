@@ -1,5 +1,6 @@
 import { createSign, createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { writeFile } from "node:fs/promises";
 import { discoverExecutionPlan } from "../src/control-discovery.mjs";
 import { acquireLiveSourceModel, normalizeDesiredUnits } from "../src/live-source-model.mjs";
 import { applySourceDeltaLocal } from "../src/local-v2-updater-core.mjs";
@@ -177,16 +178,26 @@ if (integrity!=="ok" || fk!==0) {
   throw new Error("executor postvalidation failed");
 }
 
-console.log(JSON.stringify({
+const report={
   contract:"sosl_sqlite_executor_v0.2.0",
   database_id:databaseId,
   observer_contract:process.env.SOSL_OBSERVER_CONTRACT || null,
   trigger_reason:triggerReason || null,
   candidate_count:candidates.length,
+  candidates:candidates.map(x=>({
+    code:x.code,
+    drive_file_id:x.drive_file_id,
+    mime_type:x.mime_type,
+    baseline_revision:x.baseline_revision,
+    live_revision:x.live_revision
+  })),
   results,
   integrity_check:integrity,
   foreign_key_violations:fk,
   counts,
   publication_attempted:false,
   drive_write_attempted:false
-},null,2));
+};
+const reportPath=String(process.env.SOSL_EXECUTOR_REPORT || "").trim();
+if (reportPath) await writeFile(reportPath,JSON.stringify(report,null,2)+"\n","utf8");
+console.log(JSON.stringify(report,null,2));
