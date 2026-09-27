@@ -6,6 +6,8 @@ on:
     paths:
       - "scripts/local_snapshot_sanitizer.py"
       - "scripts/registry-plan-v0.1.mjs"
+      - "scripts/registry-apply-v0.1.mjs"
+      - "src/local-registry-apply.mjs"
       - "src/corpus-registry.js"
       - "src/corpus-reconciler.js"
       - ".github/workflows/post-cutover-registry-convergence-proof.yml"
@@ -59,10 +61,13 @@ jobs:
       - name: Apply authorized first-cutover sanitation locally
         run: python3 scripts/local_snapshot_sanitizer.py apply --db "$SOSL_SQLITE_PATH"
 
-      - name: Re-plan live KRG1 after sanitation
+      - name: Apply live KRG1 membership locally and prove idempotence
+        run: node scripts/registry-apply-v0.1.mjs
+
+      - name: Re-plan after apply for independent read-only confirmation
         run: node scripts/registry-plan-v0.1.mjs
 
-      - name: Assert exact registry convergence
+      - name: Assert exact post-apply convergence
         run: |
           node --input-type=module <<'NODE'
           import { readFile } from "node:fs/promises";
@@ -70,8 +75,8 @@ jobs:
           const nonNoop=(r.actions??[]).filter(x=>x.kind!=="NOOP");
           const diagnostics=r.diagnostics??[];
           if(r.invalid_commands!==0) throw new Error("invalid KRG1 commands remain");
-          if(nonNoop.length) throw new Error("post-cutover registry is not converged: "+JSON.stringify(nonNoop));
-          if(diagnostics.length) throw new Error("post-cutover diagnostics remain: "+JSON.stringify(diagnostics));
+          if(nonNoop.length) throw new Error("post-apply registry is not converged: "+JSON.stringify(nonNoop));
+          if(diagnostics.length) throw new Error("post-apply diagnostics remain: "+JSON.stringify(diagnostics));
           if(r.intent_entries!==192) throw new Error("unexpected intent count: "+r.intent_entries);
           console.log("POST_CUTOVER_REGISTRY_CONVERGED",JSON.stringify({
             intent_entries:r.intent_entries,
