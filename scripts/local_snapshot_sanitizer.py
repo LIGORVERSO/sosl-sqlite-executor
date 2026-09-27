@@ -89,7 +89,7 @@ def retire_archived(c, code):
     c.execute("DELETE FROM v2_source_revisions WHERE source_id=?", (sid,))
     c.execute("DELETE FROM v2_sync_state WHERE source_id=?", (sid,))
     c.execute("DELETE FROM v2_source_objects WHERE source_id=?", (sid,))
-    c.execute("""UPDATE corpus_registry SET body_present=0,state='INACTIVE',updated_at=datetime('now')
+    c.execute("""DELETE FROM corpus_registry
       WHERE sosl_code=? AND desired_presence='ABSENT'""", (code,))
 
 def detach_v2_krg1(c):
@@ -124,8 +124,8 @@ def detach_legacy_krg1(c):
 def validate(c):
     bad = scalar(c, """SELECT COUNT(*) FROM v2_source_objects
       WHERE sosl_code IN ('KRG1','PROV0008','PROV0013','PROV0017','PROV0018','PROV0020')""")
-    archive_bodies = scalar(c, """SELECT COUNT(*) FROM corpus_registry
-      WHERE sosl_code IN ('PROV0008','PROV0013','PROV0017','PROV0018','PROV0020') AND body_present<>0""")
+    archive_registry_rows = scalar(c, """SELECT COUNT(*) FROM corpus_registry
+      WHERE sosl_code IN ('PROV0008','PROV0013','PROV0017','PROV0018','PROV0020')""")
     legacy_krg = scalar(c, "SELECT COUNT(*) FROM source_objects WHERE sosl_code='KRG1'")
     fixture = counts(c)["test_fixture_units"]
     fk = len(c.execute("PRAGMA foreign_key_check").fetchall())
@@ -137,7 +137,7 @@ def validate(c):
     out = {
       **counts(c),
       "removed_sources_remaining": bad,
-      "archive_bodies_remaining": archive_bodies,
+      "archive_registry_rows_remaining": archive_registry_rows,
       "legacy_krg_source_remaining": legacy_krg,
       "fixture_units": fixture,
       "foreign_key_violations": fk,
@@ -145,7 +145,7 @@ def validate(c):
       "v2_fts_orphans": v2_fts_orphans,
       "legacy_fts_orphans": legacy_fts_orphans
     }
-    if bad or archive_bodies or legacy_krg or fixture<=0 or fk or integrity!="ok" or v2_fts_orphans or legacy_fts_orphans:
+    if bad or archive_registry_rows or legacy_krg or fixture<=0 or fk or integrity!="ok" or v2_fts_orphans or legacy_fts_orphans:
         raise RuntimeError("POSTVALIDATION_FAILED " + json.dumps(out))
     return out
 
