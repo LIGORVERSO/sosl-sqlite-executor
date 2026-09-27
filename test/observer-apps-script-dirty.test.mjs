@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
 async function observerContext() {
-  const source=await readFile(new URL("../apps-script/observer-v0.2.0/Code.gs",import.meta.url),"utf8");
+  const source=await readFile(new URL("../apps-script/observer-v0.2.1/Code.gs",import.meta.url),"utf8");
   const context={console};
   vm.createContext(context);
   vm.runInContext(source,context,{filename:"Code.gs"});
@@ -101,4 +101,78 @@ test("registry dirty clears only after published snapshot carries exact KRG1 rev
   }};
   assert.equal(ctx.clearAcknowledged_(state,plan),1);
   assert.equal(state.dirty["gil-main"],undefined);
+});
+
+
+test("quiet period uses latest source modification, not first detection",async()=>{
+  const ctx=await observerContext();
+  const dirty={
+    firstSeenAt:0,
+    lastDispatchAt:null,
+    lastDispatchSignature:"",
+    files:{
+      A:{observedRevision:"drive-version:1",sourceModifiedAtMs:2*60*1000,lastSeenAt:15*60*1000},
+      B:{observedRevision:"drive-version:2",sourceModifiedAtMs:12*60*1000,lastSeenAt:15*60*1000}
+    },
+    reasons:{SOURCE_CHANGED:true}
+  };
+  const at15=ctx.dispatchEligibility_(dirty,15*60*1000,10*60*1000,45*60*1000);
+  assert.equal(at15.ready,false);
+  assert.equal(at15.reason,"WAITING_QUIET");
+  const at30=ctx.dispatchEligibility_(dirty,30*60*1000,10*60*1000,45*60*1000);
+  assert.equal(at30.ready,true);
+  assert.equal(at30.reason,"READY");
+});
+
+test("new revision moves quiet-period anchor forward",async()=>{
+  const ctx=await observerContext();
+  const state={dirty:{}};
+  ctx.markDirty_(state,"gil-main","TEST","SOURCE_CHANGED",15*60*1000,"drive-version:24","2026-09-27T16:00:00-03:00");
+  const first=state.dirty["gil-main"].files.TEST.sourceModifiedAtMs;
+  ctx.markDirty_(state,"gil-main","TEST","SOURCE_CHANGED",30*60*1000,"drive-version:25","2026-09-27T16:22:00-03:00");
+  const second=state.dirty["gil-main"].files.TEST.sourceModifiedAtMs;
+  assert.ok(second>first);
+  const eligibility=ctx.dispatchEligibility_(
+    state.dirty["gil-main"],
+    Date.parse("2026-09-27T16:30:00-03:00"),
+    10*60*1000,
+    45*60*1000
+  );
+  assert.equal(eligibility.ready,false);
+  assert.equal(eligibility.reason,"WAITING_QUIET");
+});
+
+test("same dispatched revision set waits for ACK before redispatch timeout",async()=>{
+  const ctx=await observerContext();
+  const dirty={
+    firstSeenAt:0,
+    lastDispatchAt:30*60*1000,
+    lastDispatchSignature:"TEST@drive-version:24",
+    files:{
+      TEST:{observedRevision:"drive-version:24",sourceModifiedAtMs:10*60*1000,lastSeenAt:15*60*1000}
+    },
+    reasons:{SOURCE_CHANGED:true}
+  };
+  const at45=ctx.dispatchEligibility_(dirty,45*60*1000,10*60*1000,45*60*1000);
+  assert.equal(at45.ready,false);
+  assert.equal(at45.reason,"WAITING_ACK");
+  const at76=ctx.dispatchEligibility_(dirty,76*60*1000,10*60*1000,45*60*1000);
+  assert.equal(at76.ready,true);
+  assert.equal(at76.reason,"RETRY_TIMEOUT");
+});
+
+test("different revision signature can dispatch after its own quiet period",async()=>{
+  const ctx=await observerContext();
+  const dirty={
+    firstSeenAt:0,
+    lastDispatchAt:30*60*1000,
+    lastDispatchSignature:"TEST@drive-version:24",
+    files:{
+      TEST:{observedRevision:"drive-version:25",sourceModifiedAtMs:32*60*1000,lastSeenAt:35*60*1000}
+    },
+    reasons:{SOURCE_CHANGED:true}
+  };
+  const eligibility=ctx.dispatchEligibility_(dirty,45*60*1000,10*60*1000,45*60*1000);
+  assert.equal(eligibility.ready,true);
+  assert.equal(eligibility.reason,"READY");
 });
