@@ -1,0 +1,116 @@
+name: Full prepublication dry run
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/manifest-preview-v0.1.mjs"
+      - "src/local-manifest.mjs"
+      - "src/live-krg1.mjs"
+      - "scripts/registry-apply-v0.1.mjs"
+      - "scripts/executor-v0.2.mjs"
+      - "scripts/local_snapshot_sanitizer.py"
+      - "scripts/build_snapshot_bundle.py"
+      - ".github/workflows/full-prepublication-dry-run.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      SOSL_DATABASE_ID: gil-main
+      SOSL_TRIGGER_REASON: SOURCE_CHANGED
+      SOSL_EXECUTOR_REPORT: work/executor-report.json
+      SOSL_MANIFEST_REPORT: work/manifest-report.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Download stable snapshot readonly
+        shell: bash
+        run: |
+          mkdir -p work/outer work/inner
+          node --input-type=module <<'NODE'
+          import { writeFile } from "node:fs/promises";
+          import { googleAccessTokenFromServiceAccountJson } from "./src/google-readonly.mjs";
+          const token=await googleAccessTokenFromServiceAccountJson(
+            process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
+            ["https://www.googleapis.com/auth/drive.readonly"]
+          );
+          const r=await fetch(
+            "https://www.googleapis.com/drive/v3/files/1b5ecjJH1r0Johag1f25GjxJrJLUyn1HF?alt=media",
+            {headers:{authorization:"Bearer "+token}}
+          );
+          if(!r.ok) throw new Error("snapshot download failed: "+r.status);
+          await writeFile("work/snapshot-bundle.zip",new Uint8Array(await r.arrayBuffer()));
+          NODE
+          unzip -q work/snapshot-bundle.zip -d work/outer
+          unzip -q work/outer/GIL_SQLITE_SNAPSHOT_CURRENT.zip -d work/inner
+          DB="$(find work/inner -type f \( -name '*.db' -o -name '*.sqlite' \) | head -n 1)"
+          test -n "$DB"
+          echo "SOSL_SQLITE_PATH=$PWD/$DB" >> "$GITHUB_ENV"
+
+      - name: Apply one-time first-cutover sanitation locally
+        run: python3 scripts/local_snapshot_sanitizer.py apply --db "$SOSL_SQLITE_PATH"
+
+      - name: Reconcile live KRG1 registry and derived control locally
+        run: node scripts/registry-apply-v0.1.mjs
+
+      - name: Apply all currently discoverable body deltas locally
+        run: node scripts/executor-v0.2.mjs
+
+      - name: Rebuild manifest from live authority and local SQLite
+        run: node scripts/manifest-preview-v0.1.mjs
+
+      - name: Assert candidate is clean before publication
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const m=JSON.parse(await readFile(process.env.SOSL_MANIFEST_REPORT,"utf8"));
+          if(m.has_material_delta){
+            const dirty=m.source_values.slice(1).filter(r=>{
+              const status=String(r[12]??"");
+              const live=String(r[4]??"");
+              const processed=String(r[8]??"");
+              return !["OK","CONGELADO_OK","RETIRADO","CONTROLE_DERIVADO_OK"].includes(status) ||
+                     (String(r[5])==="PRESENT" && String(r[7])==="1" && live && processed && live!==processed);
+            });
+            throw new Error("PREPUBLICATION_NOT_CLEAN "+JSON.stringify({
+              sync_counts:m.sync_counts,
+              dirty:dirty.slice(0,50)
+            }));
+          }
+          console.log("PREPUBLICATION_CLEAN",JSON.stringify({
+            live_krg1_revision:m.live_krg1_revision,
+            processed_krg1_revision:m.processed_krg1_revision,
+            source_rows:m.source_values.length-1,
+            sync_counts:m.sync_counts
+          }));
+          NODE
+
+      - name: Build publishable self-certifying bundle without publishing
+        run: |
+          python3 scripts/build_snapshot_bundle.py \
+            --db "$SOSL_SQLITE_PATH" \
+            --executor-report "$SOSL_EXECUTOR_REPORT" \
+            --report-out work/build-report.json \
+            --out work/GIL_SQLITE_SNAPSHOT_CURRENT.next.zip
+
+      - name: Assert all publish inputs exist and no mutation occurred
+        run: |
+          test -s work/GIL_SQLITE_SNAPSHOT_CURRENT.next.zip
+          test -s work/build-report.json
+          test -s work/manifest-report.json
+          test -s work/executor-report.json
