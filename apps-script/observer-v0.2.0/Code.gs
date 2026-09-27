@@ -268,7 +268,7 @@ function activeExecutor_(control) {
   return row;
 }
 
-function dispatchGitHub_(executor, dbId, reasons) {
+function dispatchGitHub_(executor, dbId, reasons, dirtyFiles) {
   const token=PropertiesService.getScriptProperties().getProperty(OBSERVER_V2.githubTokenKey);
   if (!token) throw new Error("GITHUB_FINE_GRAINED_TOKEN_MISSING");
 
@@ -289,7 +289,13 @@ function dispatchGitHub_(executor, dbId, reasons) {
       inputs:{
         database_id:dbId,
         observer_contract:OBSERVER_V2.contract,
-        trigger_reason:reasons.join(",").slice(0,200)
+        trigger_reason:reasons.join(",").slice(0,200),
+        dirty_files_json:JSON.stringify(
+          Object.entries(dirtyFiles||{}).map(([file_id,value])=>({
+            file_id,
+            observed_revision:String(value?.observedRevision||"")
+          }))
+        ).slice(0,60000)
       }
     })
   });
@@ -344,7 +350,12 @@ function observerCycle_(forceNoDispatch) {
 
       const executor=activeExecutor_(control);
       if (!executor) throw new Error("NO_ACTIVE_EXECUTOR");
-      const result=dispatchGitHub_(executor,dbId,Object.keys(dirty.reasons||{}));
+      const result=dispatchGitHub_(
+        executor,
+        dbId,
+        Object.keys(dirty.reasons||{}),
+        dirty.files||{}
+      );
       dirty.lastDispatchAt=nowMs;
       dispatches.push({database_id:dbId,status:result.status});
     });
