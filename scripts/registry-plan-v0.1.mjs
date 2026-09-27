@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { discoverExecutionPlan } from "../src/control-discovery.mjs";
 import { compileCorpusRegistryIntent } from "../src/corpus-registry.js";
@@ -156,7 +157,7 @@ try {
     return acc;
   },{});
 
-  console.log(JSON.stringify({
+  const report={
     contract:"sosl_local_registry_plan_v0.1.0",
     database_id:databaseId,
     krg1_revision:intent.krg1_revision,
@@ -170,7 +171,10 @@ try {
     diagnostics:reconciliation.diagnostics,
     sqlite_write_attempted:false,
     drive_write_attempted:false
-  },null,2));
+  };
+  const reportPath=String(process.env.SOSL_REGISTRY_REPORT||"").trim();
+  if(reportPath) await writeFile(reportPath,JSON.stringify(report,null,2)+"\n","utf8");
+  console.log(JSON.stringify(report,null,2));
 } finally {
   db.close();
 }
