@@ -105,7 +105,8 @@ function sourceRows(rows){
     "codigo_logico","drive_file_id","nome_drive","modified_time_drive",
     "drive_revision","desired_presence","state","body_present",
     "db_processed_revision","db_sync_status","membership_revision",
-    "registry_updated_at","estado_sync","meta_error"
+    "registry_updated_at","estado_sync","meta_error",
+    "ultima_verificacao","observacao"
   ],...rows];
 }
 
@@ -146,6 +147,7 @@ export async function buildLocalManifest({
   }
 
   const controlState=readKrg1DerivedControlState({dbPath});
+  const generatedAt=new Date().toISOString();
   const rows=[];
   const counts={};
   const fatalStates=[];
@@ -190,11 +192,11 @@ export async function buildLocalManifest({
     rows.push([
       code,item.fileId,s(item.meta?.name),s(item.meta?.modified_time),
       liveRevision,desired,state,String(body),processedRevision,syncStatus,
-      membershipRevision,s(row?.updated_at),status,s(item.meta?.error)
+      membershipRevision,s(row?.updated_at),status,s(item.meta?.error),
+      generatedAt,""
     ]);
   }
 
-  const now=new Date().toISOString();
   const liveRegistryRevision=s(liveKrg1Revision);
   const processedRegistryRevision=s(controlState?.processed_revision);
   if(!controlState||liveRegistryRevision!==processedRegistryRevision){
@@ -203,7 +205,7 @@ export async function buildLocalManifest({
 
   const global=[
     ["manifest_version","v0.4","ATIVO","Gerado do KRG1 vivo + Drive + SQLite local derivado."],
-    ["generated_at",now,"OK","Manifesto reconstruível; não substitui autoridade viva."],
+    ["generated_at",generatedAt,"OK","Manifesto reconstruível; não substitui autoridade viva."],
     ["authority_registry","KRG1","OK","KRG1 permanece autoridade registral externa ao corpo SQLite."],
     ["material_authority","Google Drive","OK","Metadados observados diretamente no Drive."],
     ["krg1_membership_revision",liveRegistryRevision,"OK","Revisão viva observada durante esta geração."],
@@ -245,7 +247,7 @@ export async function buildLocalManifest({
 
   return {
     contract:"sosl_local_manifest_v0.4.0",
-    generated_at:now,
+    generated_at:generatedAt,
     has_material_delta:hasMaterialDelta,
     live_krg1_revision:liveRegistryRevision,
     processed_krg1_revision:processedRegistryRevision,
@@ -300,7 +302,7 @@ export async function writeManifestAtomic({
           startRowIndex:0,
           endRowIndex:Math.max(Number(sourceSheet.gridProperties?.rowCount??1000),1000),
           startColumnIndex:0,
-          endColumnIndex:14
+          endColumnIndex:16
         },
         rows:rowsData(manifest.source_values),
         fields:"userEnteredValue"
