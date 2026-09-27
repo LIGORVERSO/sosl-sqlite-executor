@@ -1,14 +1,13 @@
 import { DatabaseSync } from "node:sqlite";
 import { discoverExecutionPlan } from "../src/control-discovery.mjs";
-import { compileCorpusRegistryIntent } from "../src/corpus-registry.js";
 import { planCorpusReconciliation } from "../src/corpus-reconciler.js";
 import { applyCorpusRegistryPlanLocal } from "../src/local-registry-apply.mjs";
 import { applyKrg1ControlPlaneLocal, readKrg1DerivedControlState } from "../src/krg1-control-plane-local.mjs";
 import {
   googleAccessTokenFromServiceAccountJson,
-  readSheetValues,
   driveFileMeta
 } from "../src/google-readonly.mjs";
+import { loadLiveKrg1 } from "../src/live-krg1.mjs";
 
 const GDOC="application/vnd.google-apps.document";
 const GSHEET="application/vnd.google-apps.spreadsheet";
@@ -21,14 +20,6 @@ function adapterForMime(mime) {
   if (mime===DOCX) return "drive_docx_live_v2";
   if (mime===XLSX) return "drive_xlsx_rows_live_v2";
   return null;
-}
-function sheetRows(values) {
-  if (!Array.isArray(values)||values.length<1) return [];
-  const headers=(values[0]??[]).map(x=>String(x??"").trim());
-  return values.slice(1).map((row,index)=>({
-    row_number:index+2,
-    cells:Object.fromEntries(headers.map((h,i)=>[h,row?.[i]??""]))
-  }));
 }
 function queryAll(db,sql,...args){return db.prepare(sql).all(...args);}
 function counts(actions){
@@ -50,27 +41,11 @@ const executionPlan=await discoverExecutionPlan(token);
 const database=executionPlan.databases.find(x=>x.database_id===databaseId);
 if(!database?.registry_spreadsheet_id) throw new Error("registry spreadsheet unavailable");
 
-const registryMetaBefore=await driveFileMeta(database.registry_spreadsheet_id,token);
-const [identityValues,provisionalValues,relationValues]=await Promise.all([
-  readSheetValues(database.registry_spreadsheet_id,"IDENTIDADES!A1:T999",token),
-  readSheetValues(database.registry_spreadsheet_id,"SUPORTES_PROVISORIOS!A1:R999",token),
-  readSheetValues(database.registry_spreadsheet_id,"RELACOES!A1:G999",token)
-]);
-const registryMetaAfter=await driveFileMeta(database.registry_spreadsheet_id,token);
-if(String(registryMetaBefore.version)!==String(registryMetaAfter.version)){
-  throw new Error("KRG1_CHANGED_DURING_STRUCTURED_READ");
-}
-const revision="drive-version:"+String(registryMetaAfter.version);
-const identityTab={title:"IDENTIDADES",rows:sheetRows(identityValues)};
-const provisionalTab={title:"SUPORTES_PROVISORIOS",rows:sheetRows(provisionalValues)};
-const relationTab={title:"RELACOES",rows:sheetRows(relationValues)};
-const intent=compileCorpusRegistryIntent({
-  sources:[{
-    sosl_code:"KRG1",
-    revision,
-    tabs:[identityTab,provisionalTab,relationTab]
-  }]
+const liveKrg1=await loadLiveKrg1({
+  spreadsheetId:database.registry_spreadsheet_id,
+  accessToken:token
 });
+const {revision,identityTab,relationTab,intent}=liveKrg1;
 if(intent.invalid_commands.length){
   throw new Error("KRG1_INVALID_COMMANDS "+JSON.stringify(intent.invalid_commands));
 }
