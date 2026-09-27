@@ -11,6 +11,10 @@ on:
       - "scripts/executor-v0.2.mjs"
       - "scripts/body-sync-local.mjs"
       - "src/local-v2-updater-core.mjs"
+      - "scripts/retirement-reconcile-local.mjs"
+      - "scripts/retirement-finalize-local.mjs"
+      - "src/corpus-retirement.js"
+      - "src/retirement-guard.js"
       - "scripts/local_snapshot_sanitizer.py"
       - "scripts/build_snapshot_bundle.py"
       - "scripts/publish-snapshot-v0.1.mjs"
@@ -75,6 +79,12 @@ jobs:
 
       - name: Reconcile live KRG1 registry and derived control locally
         run: node scripts/registry-apply-v0.1.mjs
+
+      - name: Advance retirement guards without polling or Drive writes
+        run: node scripts/retirement-reconcile-local.mjs
+
+      - name: Finalize any retirement that already passed every guard
+        run: node scripts/retirement-finalize-local.mjs
 
       - name: Materialize and synchronize every KRG1-present body locally
         run: node scripts/body-sync-local.mjs
