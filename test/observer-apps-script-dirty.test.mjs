@@ -69,3 +69,36 @@ test("retirement pending dirty is not acknowledged before lifecycle completion",
   assert.equal(ctx.clearAcknowledged_(state,plan),0);
   assert.equal(state.dirty["gil-main"].files.RET.observedRevision,"drive-version:31");
 });
+
+
+test("registry dirty is not acknowledged by an unpublished live revision",async()=>{
+  const ctx=await observerContext();
+  const state={dirty:{}};
+  ctx.markDirty_(state,"gil-main","KRG1","REGISTRY_CHANGED",1000,"drive-version:930");
+  const plan={databasePlans:{
+    "gil-main":{
+      registryId:"KRG1",
+      registryProcessedRevision:"drive-version:930",
+      snapshotStatus:"DIRTY",
+      manifestByFileId:{}
+    }
+  }};
+  assert.equal(ctx.clearAcknowledged_(state,plan),0);
+  assert.equal(state.dirty["gil-main"].files.KRG1.observedRevision,"drive-version:930");
+});
+
+test("registry dirty clears only after published snapshot carries exact KRG1 revision",async()=>{
+  const ctx=await observerContext();
+  const state={dirty:{}};
+  ctx.markDirty_(state,"gil-main","KRG1","REGISTRY_CHANGED",1000,"drive-version:930");
+  const plan={databasePlans:{
+    "gil-main":{
+      registryId:"KRG1",
+      registryProcessedRevision:"drive-version:930",
+      snapshotStatus:"PUBLISHED_CURRENT",
+      manifestByFileId:{}
+    }
+  }};
+  assert.equal(ctx.clearAcknowledged_(state,plan),1);
+  assert.equal(state.dirty["gil-main"],undefined);
+});
