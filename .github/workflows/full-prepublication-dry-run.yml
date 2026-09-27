@@ -63,9 +63,6 @@ jobs:
           test -n "$DB"
           echo "SOSL_SQLITE_PATH=$PWD/$DB" >> "$GITHUB_ENV"
 
-      - name: Apply one-time first-cutover sanitation locally
-        run: python3 scripts/local_snapshot_sanitizer.py apply --db "$SOSL_SQLITE_PATH"
-
       - name: Reconcile live KRG1 registry and derived control locally
         run: node scripts/registry-apply-v0.1.mjs
 
