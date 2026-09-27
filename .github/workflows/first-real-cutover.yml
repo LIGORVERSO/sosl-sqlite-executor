@@ -1,3 +1,4 @@
+# transport retry hardened
 name: First real SQLite cutover
 
 on:
