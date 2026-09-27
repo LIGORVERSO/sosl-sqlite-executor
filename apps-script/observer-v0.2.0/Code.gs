@@ -46,6 +46,10 @@ function manifestRows_(id) {
   return rowsToObjects_(sheetValues_(id, "FONTES"));
 }
 
+function manifestGlobal_(id) {
+  return kv_(sheetValues_(id, "ESTADO_GLOBAL"));
+}
+
 function sourceClass_(row) {
   const desired=String(row.desired_presence||"");
   const state=String(row.state||"");
@@ -74,6 +78,7 @@ function buildPlan_(control) {
 
   dbs.forEach(db => {
     const rows = manifestRows_(db.manifest_spreadsheet_id);
+    const manifestGlobal = manifestGlobal_(db.manifest_spreadsheet_id);
     const watched = rows.filter(row => {
       const c = sourceClass_(row);
       return c==="OPERATIONAL" || c==="FROZEN_TEST" || c==="RETIREMENT_PENDING";
@@ -96,7 +101,11 @@ function buildPlan_(control) {
     databasePlans[db.database_id] = {
       database: db,
       manifestByFileId: byFile,
-      registryId
+      registryId,
+      registryProcessedRevision:String(
+        manifestGlobal.snapshot_krg1_membership_revision || ""
+      ),
+      snapshotStatus:String(manifestGlobal.snapshot_status || "")
     };
   });
 
@@ -209,14 +218,27 @@ function clearAcknowledged_(state, plan) {
     if (!p) return;
 
     Object.keys(dirty.files).forEach(fileId => {
-      if (fileId===p.registryId) return;
-      const row=p.manifestByFileId[fileId];
-      if (!row) return;
       const dirtyFile=dirty.files[fileId];
       const expected=
         dirtyFile && typeof dirtyFile==="object"
           ? String(dirtyFile.observedRevision||"")
           : "";
+
+      if (fileId===p.registryId) {
+        if (
+          expected &&
+          expected!=="REMOVED" &&
+          p.snapshotStatus==="PUBLISHED_CURRENT" &&
+          p.registryProcessedRevision===expected
+        ) {
+          delete dirty.files[fileId];
+          cleared++;
+        }
+        return;
+      }
+
+      const row=p.manifestByFileId[fileId];
+      if (!row) return;
       if (!expected || expected==="REMOVED") return;
       const drive=String(row.drive_revision||"");
       const processed=String(row.db_processed_revision||"");
