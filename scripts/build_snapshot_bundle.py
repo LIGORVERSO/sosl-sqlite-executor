@@ -61,6 +61,7 @@ def main():
     ap.add_argument("--db",required=True)
     ap.add_argument("--out",required=True)
     ap.add_argument("--executor-report")
+    ap.add_argument("--report-out")
     args=ap.parse_args()
 
     db=Path(args.db).resolve()
@@ -120,14 +121,19 @@ def main():
         if len(inner_bytes)!=embedded_meta["zip_size_bytes"]:
             raise RuntimeError("INNER_ZIP_SIZE_MISMATCH")
 
-        print(json.dumps({
+        result={
             "contract":CONTRACT,
             "ok":True,
             "outer_path":str(out),
             "outer_size_bytes":out.stat().st_size,
             "outer_sha256":outer_hash,
             "meta":meta
-        },ensure_ascii=False,indent=2))
+        }
+        if args.report_out:
+            report_out=Path(args.report_out).resolve()
+            report_out.parent.mkdir(parents=True,exist_ok=True)
+            report_out.write_text(json.dumps(result,ensure_ascii=False,indent=2)+"\n","utf8")
+        print(json.dumps(result,ensure_ascii=False,indent=2))
 
 if __name__=="__main__":
     main()
