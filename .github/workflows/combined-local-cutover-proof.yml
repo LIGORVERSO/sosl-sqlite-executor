@@ -1,0 +1,114 @@
+name: Combined local cutover proof
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/local_snapshot_sanitizer.py"
+      - "scripts/executor-v0.2.mjs"
+      - ".github/workflows/combined-local-cutover-proof.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      SOSL_DATABASE_ID: gil-main
+      SOSL_TRIGGER_REASON: SOURCE_CHANGED
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          package-manager-cache: npm
+
+      - run: npm ci
+
+      - name: Download current snapshot readonly
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { writeFile } from "node:fs/promises";
+          import { googleAccessTokenFromServiceAccountJson } from "./src/google-readonly.mjs";
+          const token=await googleAccessTokenFromServiceAccountJson(
+            process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
+            ["https://www.googleapis.com/auth/drive.readonly"]
+          );
+          const r=await fetch(
+            "https://www.googleapis.com/drive/v3/files/1b5ecjJH1r0Johag1f25GjxJrJLUyn1HF?alt=media",
+            {headers:{authorization:"Bearer "+token}}
+          );
+          if(!r.ok) throw new Error("snapshot download failed: "+r.status);
+          await writeFile("snapshot-bundle.zip",new Uint8Array(await r.arrayBuffer()));
+          NODE
+
+      - name: Unpack snapshot
+        shell: bash
+        run: |
+          mkdir -p work/outer work/inner
+          unzip -q snapshot-bundle.zip -d work/outer
+          unzip -q work/outer/GIL_SQLITE_SNAPSHOT_CURRENT.zip -d work/inner
+          DB="$(find work/inner -type f \( -name '*.db' -o -name '*.sqlite' \) | head -n 1)"
+          test -n "$DB"
+          echo "SOSL_SQLITE_PATH=$PWD/$DB" >> "$GITHUB_ENV"
+
+      - name: Apply one-time snapshot sanitation locally
+        run: python3 scripts/local_snapshot_sanitizer.py apply --db "$SOSL_SQLITE_PATH"
+
+      - name: Apply current Drive deltas locally
+        run: node scripts/executor-v0.2.mjs
+
+      - name: Validate combined cutover state
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, sqlite3
+          db=os.environ["SOSL_SQLITE_PATH"]
+          c=sqlite3.connect(db)
+          integrity=c.execute("PRAGMA integrity_check").fetchone()[0]
+          fk=len(c.execute("PRAGMA foreign_key_check").fetchall())
+          removed=c.execute("""
+            SELECT COUNT(*) FROM v2_source_objects
+            WHERE sosl_code IN ('KRG1','PROV0008','PROV0013','PROV0017','PROV0018','PROV0020')
+          """).fetchone()[0]
+          archive_bodies=c.execute("""
+            SELECT COUNT(*) FROM corpus_registry
+            WHERE sosl_code IN ('PROV0008','PROV0013','PROV0017','PROV0018','PROV0020')
+              AND body_present<>0
+          """).fetchone()[0]
+          test_rev=c.execute("""
+            SELECT ss.last_processed_revision
+            FROM v2_sync_state ss
+            JOIN v2_source_objects s ON s.source_id=ss.source_id
+            WHERE s.sosl_code='TESTV2I01'
+          """).fetchone()[0]
+          test_marker=c.execute("""
+            SELECT COUNT(*) FROM v2_content_units u
+            JOIN v2_source_objects s ON s.source_id=u.source_id
+            WHERE s.sosl_code='TESTV2I01' AND u.active=1
+              AND u.content_text LIKE '%PROVA DELTA LOCAL%'
+          """).fetchone()[0]
+          assert integrity=="ok", integrity
+          assert fk==0, fk
+          assert removed==0, removed
+          assert archive_bodies==0, archive_bodies
+          assert test_rev!="drive-version:20", test_rev
+          assert test_marker>=1, test_marker
+          print("COMBINED_LOCAL_CUTOVER_PROOF_OK",{
+            "integrity":integrity,
+            "foreign_keys":fk,
+            "removed_sources":removed,
+            "archive_bodies":archive_bodies,
+            "test_revision":test_rev,
+            "test_marker":test_marker
+          })
+          c.close()
+          PY
