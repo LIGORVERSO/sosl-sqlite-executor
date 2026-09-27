@@ -23,6 +23,21 @@ function metadataText(code,title,identity){
 const dbPath=String(process.env.SOSL_SQLITE_PATH||"").trim();
 if(!dbPath) throw new Error("SOSL_SQLITE_PATH required");
 const reportPath=String(process.env.SOSL_BODY_SYNC_REPORT||"").trim();
+const triggerReason=String(process.env.SOSL_TRIGGER_REASON||"").trim();
+let observedDirty=null;
+try{
+  const raw=String(process.env.SOSL_DIRTY_FILES_JSON||"").trim();
+  if(raw){
+    const parsed=JSON.parse(raw);
+    if(!Array.isArray(parsed)) throw new Error("dirty files payload must be an array");
+    observedDirty=new Map(parsed.map(x=>[
+      String(x?.file_id||"").trim(),
+      String(x?.observed_revision||"").trim()
+    ]).filter(([id])=>id));
+  }
+}catch(error){
+  throw new Error("SOSL_DIRTY_FILES_JSON_INVALID "+String(error?.message||error));
+}
 
 const token=await googleAccessTokenFromServiceAccountJson(
   process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
@@ -60,11 +75,28 @@ try{
   }));
 }finally{db.close();}
 
+const targetedSourceOnly=
+  observedDirty instanceof Map &&
+  observedDirty.size>0 &&
+  !/REGISTRY_CHANGED/.test(triggerReason);
+if(targetedSourceOnly){
+  targets=targets.filter(target=>observedDirty.has(target.drive_file_id));
+}
+
 const results=[];
 for(const target of targets){
   if(target.code==="KRG1") throw new Error("KRG1_BODY_MATERIALIZATION_FORBIDDEN");
   const meta=await driveFileMeta(target.drive_file_id,token);
   const liveRevision="drive-version:"+String(meta.version);
+  if(targetedSourceOnly){
+    const expected=observedDirty.get(target.drive_file_id);
+    if(expected && expected!=="REMOVED" && expected!==liveRevision){
+      throw new Error(
+        target.code+": OBSERVED_REVISION_MOVED expected="+expected+
+        " live="+liveRevision
+      );
+    }
+  }
   if(target.body_present===1 && target.last_processed_revision===liveRevision){
     results.push({code:target.code,mode:"NOOP",revision:liveRevision});
     continue;
@@ -158,6 +190,8 @@ const report={
   contract:"sosl_local_body_sync_v0.1.0",
   ok:true,
   target_count:targets.length,
+  selection_mode:targetedSourceOnly?"OBSERVER_DIRTY_SET":"FULL_PRESENT_SET",
+  observed_dirty_count:observedDirty instanceof Map?observedDirty.size:0,
   materialized:results.filter(x=>x.mode==="MATERIALIZED").map(x=>x.code),
   updated:results.filter(x=>x.mode==="DELTA_APPLIED"||x.mode==="METADATA_ONLY").map(x=>x.code),
   noops:results.filter(x=>x.mode==="NOOP").length,
