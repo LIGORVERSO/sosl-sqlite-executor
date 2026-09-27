@@ -56,24 +56,12 @@ jobs:
       - name: Enforce live activation control before any Drive mutation
         run: node scripts/executor-activation-guard.mjs
 
-      - name: Download current stable snapshot readonly
+      - name: Download current stable snapshot readonly with pinned base version
         shell: bash
         run: |
           mkdir -p work/outer work/inner
-          node --input-type=module <<'NODE'
-          import { writeFile } from "node:fs/promises";
-          import { googleAccessTokenFromServiceAccountJson } from "./src/google-readonly.mjs";
-          const token=await googleAccessTokenFromServiceAccountJson(
-            process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
-            ["https://www.googleapis.com/auth/drive.readonly"]
-          );
-          const r=await fetch(
-            "https://www.googleapis.com/drive/v3/files/1b5ecjJH1r0Johag1f25GjxJrJLUyn1HF?alt=media",
-            {headers:{authorization:"Bearer "+token}}
-          );
-          if(!r.ok) throw new Error("snapshot download failed: "+r.status);
-          await writeFile("work/snapshot-bundle.zip",new Uint8Array(await r.arrayBuffer()));
-          NODE
+          SOSL_SNAPSHOT_DOWNLOAD_PATH=work/snapshot-bundle.zip \
+            node scripts/download-stable-snapshot.mjs
           unzip -q work/snapshot-bundle.zip -d work/outer
           unzip -q work/outer/GIL_SQLITE_SNAPSHOT_CURRENT.zip -d work/inner
           DB="$(find work/inner -type f \( -name '*.db' -o -name '*.sqlite' \) | head -n 1)"
