@@ -11,6 +11,7 @@ on:
       - "scripts/executor-v0.2.mjs"
       - "scripts/local_snapshot_sanitizer.py"
       - "scripts/build_snapshot_bundle.py"
+      - "scripts/publish-snapshot-v0.1.mjs"
       - ".github/workflows/full-prepublication-dry-run.yml"
   workflow_dispatch:
 
@@ -27,6 +28,10 @@ jobs:
       SOSL_TRIGGER_REASON: SOURCE_CHANGED
       SOSL_EXECUTOR_REPORT: work/executor-report.json
       SOSL_MANIFEST_REPORT: work/manifest-report.json
+      SOSL_BUNDLE_PATH: work/GIL_SQLITE_SNAPSHOT_CURRENT.next.zip
+      SOSL_BUILD_REPORT: work/build-report.json
+      SOSL_PUBLISH_REPORT: work/publish-dry-run.json
+      SOSL_PUBLISH_MODE: DRY_RUN
     steps:
       - uses: actions/checkout@v4
         with:
@@ -108,9 +113,13 @@ jobs:
             --report-out work/build-report.json \
             --out work/GIL_SQLITE_SNAPSHOT_CURRENT.next.zip
 
+      - name: Exercise publisher fail-closed checks without mutation
+        run: node scripts/publish-snapshot-v0.1.mjs
+
       - name: Assert all publish inputs exist and no mutation occurred
         run: |
           test -s work/GIL_SQLITE_SNAPSHOT_CURRENT.next.zip
           test -s work/build-report.json
           test -s work/manifest-report.json
           test -s work/executor-report.json
+          test -s work/publish-dry-run.json
