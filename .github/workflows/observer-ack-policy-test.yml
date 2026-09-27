@@ -6,6 +6,8 @@ on:
     paths:
       - "src/observer-ack-policy.mjs"
       - "test/observer-ack-policy.test.mjs"
+      - "test/observer-apps-script-dirty.test.mjs"
+      - "apps-script/observer-v0.2.0/Code.gs"
       - ".github/workflows/observer-ack-policy-test.yml"
   workflow_dispatch:
 
@@ -25,4 +27,4 @@ jobs:
           node-version: "24"
           package-manager-cache: false
       - name: Run observer acknowledgement regression
-        run: node --test test/observer-ack-policy.test.mjs
+        run: node --test test/observer-ack-policy.test.mjs test/observer-apps-script-dirty.test.mjs
