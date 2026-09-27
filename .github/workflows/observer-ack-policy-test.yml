@@ -1,4 +1,4 @@
-name: Observer ack policy regression
+name: Executor safety regressions
 
 on:
   push:
@@ -8,6 +8,9 @@ on:
       - "test/observer-ack-policy.test.mjs"
       - "test/observer-apps-script-dirty.test.mjs"
       - "apps-script/observer-v0.2.0/Code.gs"
+      - "src/corpus-registry.js"
+      - "src/corpus-reconciler.js"
+      - "test/corpus-registry.test.mjs"
       - ".github/workflows/observer-ack-policy-test.yml"
   workflow_dispatch:
 
@@ -27,4 +30,4 @@ jobs:
           node-version: "24"
           package-manager-cache: false
       - name: Run observer acknowledgement regression
-        run: node --test test/observer-ack-policy.test.mjs test/observer-apps-script-dirty.test.mjs
+        run: node --test test/observer-ack-policy.test.mjs test/observer-apps-script-dirty.test.mjs test/corpus-registry.test.mjs
