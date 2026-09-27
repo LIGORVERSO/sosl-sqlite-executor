@@ -42,3 +42,30 @@ test("actual Apps Script clears only after exact observed revision is processed"
   assert.equal(ctx.clearAcknowledged_(state,plan),1);
   assert.equal(state.dirty["gil-main"],undefined);
 });
+
+
+test("retirement pending source remains watched",async()=>{
+  const ctx=await observerContext();
+  assert.equal(ctx.sourceClass_({
+    desired_presence:"ABSENT",
+    state:"INACTIVE",
+    body_present:"1",
+    estado_sync:"RETIRADA_PENDENTE_CORPO"
+  }),"RETIREMENT_PENDING");
+});
+
+test("retirement pending dirty is not acknowledged before lifecycle completion",async()=>{
+  const ctx=await observerContext();
+  const state={dirty:{}};
+  ctx.markDirty_(state,"gil-main","RET","SOURCE_CHANGED",1000,"drive-version:31");
+  const plan={databasePlans:{
+    "gil-main":{
+      registryId:"KRG1",
+      manifestByFileId:{
+        RET:{drive_revision:"drive-version:31",db_processed_revision:"drive-version:31",db_sync_status:"RETIRADA_PENDENTE_CORPO"}
+      }
+    }
+  }};
+  assert.equal(ctx.clearAcknowledged_(state,plan),0);
+  assert.equal(state.dirty["gil-main"].files.RET.observedRevision,"drive-version:31");
+});
