@@ -89,6 +89,9 @@ jobs:
       - name: Rebuild manifest preview from live authority
         run: node scripts/manifest-preview-v0.1.mjs
 
+      - name: Reader compatibility gate
+        run: node scripts/local-reader-regression.mjs
+
       - name: Build self-certifying replacement bundle
         run: |
           python3 scripts/build_snapshot_bundle.py \
