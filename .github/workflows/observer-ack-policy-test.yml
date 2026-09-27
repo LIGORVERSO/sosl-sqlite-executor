@@ -13,7 +13,7 @@ on:
       - "test/corpus-registry.test.mjs"
       - "src/corpus-retirement.js"
       - "src/retirement-guard.js"
-      - "test/retirement-lifecycle.test.mjs test/local-manifest-write.test.mjs"
+      - "test/retirement-lifecycle.test.mjs"
       - "src/local-manifest.mjs"
       - "test/local-manifest-write.test.mjs"
       - ".github/workflows/observer-ack-policy-test.yml"
@@ -35,4 +35,4 @@ jobs:
           node-version: "24"
           package-manager-cache: false
       - name: Run observer acknowledgement regression
-        run: node --test test/observer-ack-policy.test.mjs test/observer-apps-script-dirty.test.mjs test/corpus-registry.test.mjs test/retirement-lifecycle.test.mjs
+        run: node --test test/observer-ack-policy.test.mjs test/observer-apps-script-dirty.test.mjs test/corpus-registry.test.mjs test/retirement-lifecycle.test.mjs test/local-manifest-write.test.mjs
