@@ -107,11 +107,18 @@ function saveState_(state) {
   PropertiesService.getScriptProperties().setProperty(OBSERVER_V2.stateKey, JSON.stringify(state));
 }
 
-function markDirty_(state, dbId, fileId, reason, nowMs) {
+function markDirty_(state, dbId, fileId, reason, nowMs, observedRevision) {
   if (!state.dirty[dbId]) {
     state.dirty[dbId] = {firstSeenAt:nowMs,lastDispatchAt:null,files:{},reasons:{}};
   }
-  state.dirty[dbId].files[fileId]=true;
+  const previous=state.dirty[dbId].files[fileId];
+  const previousRevision=previous && typeof previous==="object"
+    ? String(previous.observedRevision||"")
+    : "";
+  state.dirty[dbId].files[fileId]={
+    observedRevision:String(observedRevision||previousRevision||""),
+    lastSeenAt:nowMs
+  };
   state.dirty[dbId].reasons[reason]=true;
 }
 
@@ -128,13 +135,13 @@ function migrationReconcile_(state, plan, nowMs) {
       const row=p.manifestByFileId[fileId];
       const meta=Drive.Files.get(fileId,{fields:"id,version,trashed"});
       if (meta.trashed===true || !meta.version) {
-        markDirty_(state,dbId,fileId,"MIGRATION_METADATA_INVALID",nowMs);
+        markDirty_(state,dbId,fileId,"MIGRATION_METADATA_INVALID",nowMs,"REMOVED");
         mismatches++;
         return;
       }
       const live=revision_(meta.version);
       if (live!==String(row.db_processed_revision||"") || live!==String(row.drive_revision||"")) {
-        markDirty_(state,dbId,fileId,"MIGRATION_REVISION_MISMATCH",nowMs);
+        markDirty_(state,dbId,fileId,"MIGRATION_REVISION_MISMATCH",nowMs,live);
         mismatches++;
       }
     });
@@ -151,7 +158,7 @@ function applyChanges_(state, plan, nowMs) {
       spaces:"drive",
       includeItemsFromAllDrives:true,
       supportsAllDrives:true,
-      fields:"nextPageToken,newStartPageToken,changes(fileId,removed,file(id,trashed))"
+      fields:"nextPageToken,newStartPageToken,changes(fileId,removed,file(id,trashed,version))"
     });
     pages++;
     (response.changes||[]).forEach(change => {
@@ -160,9 +167,22 @@ function applyChanges_(state, plan, nowMs) {
       const dbs=plan.fileToDatabases[id]||[];
       if (!dbs.length) return;
       relevant++;
+      const observedRevision=
+        change.removed===true || change.file?.trashed===true
+          ? "REMOVED"
+          : change.file?.version
+            ? revision_(change.file.version)
+            : "";
       dbs.forEach(dbId => {
         const p=plan.databasePlans[dbId];
-        markDirty_(state,dbId,id,id===p.registryId?"REGISTRY_CHANGED":"SOURCE_CHANGED",nowMs);
+        markDirty_(
+          state,
+          dbId,
+          id,
+          id===p.registryId?"REGISTRY_CHANGED":"SOURCE_CHANGED",
+          nowMs,
+          observedRevision
+        );
       });
     });
     if (response.nextPageToken) {
@@ -186,10 +206,20 @@ function clearAcknowledged_(state, plan) {
       if (fileId===p.registryId) return;
       const row=p.manifestByFileId[fileId];
       if (!row) return;
+      const dirtyFile=dirty.files[fileId];
+      const expected=
+        dirtyFile && typeof dirtyFile==="object"
+          ? String(dirtyFile.observedRevision||"")
+          : "";
+      if (!expected || expected==="REMOVED") return;
       const drive=String(row.drive_revision||"");
       const processed=String(row.db_processed_revision||"");
       const sync=String(row.db_sync_status||"");
-      if (drive && drive===processed && !/DIRTY|ERROR|PENDING/i.test(sync)) {
+      if (
+        drive===expected &&
+        processed===expected &&
+        !/DIRTY|ERROR|PENDING/i.test(sync)
+      ) {
         delete dirty.files[fileId];
         cleared++;
       }
