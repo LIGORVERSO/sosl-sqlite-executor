@@ -113,3 +113,158 @@ export function applySourceDeltaLocal({dbPath, code, expectedBaselineRevision, o
     return {ok:true,mode:'DELTA_APPLIED',changed,added,removed,active_units:activeCount,revision:observedRevision,integrity_check:integrity,foreign_key_violations:fk,fts_orphans:ftsOrphans};
   } finally { db.close(); }
 }
+
+
+export function materializeSourceLocal({
+  dbPath,code,observedRevision,sourceHash,desiredUnits,title,mimeType,
+  sourceClass,authorityRole,liveLocation,sourceFormat
+}) {
+  const db=new DatabaseSync(dbPath);
+  try {
+    db.exec('PRAGMA foreign_keys=ON');
+    const reg=db.prepare(`
+      SELECT sosl_code,source_id,drive_file_id,adapter,registry_kind,
+             desired_presence,state,body_present
+      FROM corpus_registry WHERE sosl_code=?
+    `).get(code);
+    if(!reg) throw new Error(`${code}: REGISTRY_ROW_NOT_FOUND`);
+    if(String(reg.desired_presence)!=='PRESENT'||Number(reg.body_present)!==0) {
+      throw new Error(`${code}: MATERIALIZATION_REGISTRY_GUARD_FAILED`);
+    }
+    const existing=Number(db.prepare(
+      'SELECT COUNT(*) AS n FROM v2_source_objects WHERE sosl_code=? OR source_id=?'
+    ).get(code,reg.source_id).n);
+    if(existing!==0) throw new Error(`${code}: SOURCE_ALREADY_EXISTS`);
+
+    const desired=desiredUnits.map((u,i)=>({
+      ...u,
+      position_ordinal:u.position_ordinal??i,
+      content_hash:u.content_hash??hash(u.content_text),
+      content_id:u.content_id??contentId(
+        u.stable_ref,observedRevision,u.content_hash??hash(u.content_text)
+      )
+    }));
+    const ts=now();
+    let maxPk=Number(db.prepare(
+      'SELECT COALESCE(MAX(content_pk),0) AS n FROM v2_content_units'
+    ).get().n);
+
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare(`
+        INSERT INTO v2_source_objects(
+          source_id,sosl_code,title,mime_type,source_class,authority_role,
+          drive_file_id,live_location,source_format,source_size,active,
+          first_seen_at,last_seen_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,NULL,1,?,?)
+      `).run(
+        reg.source_id,code,title??code,mimeType??null,
+        sourceClass??(reg.registry_kind==='provisional_support'?'provisional_support':'registered_source'),
+        authorityRole??(reg.registry_kind==='provisional_support'?'SUPORTE_PROVISORIO_NAO_IDENTITARIO':'registered_authority'),
+        reg.drive_file_id,liveLocation??null,sourceFormat??reg.adapter,ts,ts
+      );
+      db.prepare(`
+        INSERT INTO v2_sync_state(
+          source_id,last_observed_revision,last_processed_revision,
+          last_verified_revision,last_sync_status,last_error,updated_at
+        ) VALUES(?,?,?,?,? ,NULL,?)
+      `).run(
+        reg.source_id,observedRevision,observedRevision,observedRevision,
+        'verified_live',ts
+      );
+      db.prepare(`
+        INSERT INTO v2_source_revisions(
+          source_id,observed_revision,verified_revision,source_hash,
+          observed_at,verified_at,verification_state
+        ) VALUES(?,?,?,?,?,?,?)
+      `).run(
+        reg.source_id,observedRevision,observedRevision,sourceHash,
+        ts,ts,'validated_live'
+      );
+
+      const ins=db.prepare(`
+        INSERT INTO v2_content_units(
+          content_pk,content_id,stable_ref,source_id,source_revision,plane,
+          unit_type,position_ordinal,heading_path,content_text,content_hash,
+          semantic_state,verification_state,active,supersedes_content_id,
+          provenance_locator,created_at,updated_at
+        ) VALUES(?,?,?,?,?,'connected_lens_unspecified',?,?,?,?,?,
+                 'derived_literal','validated_live',1,NULL,?,?,?)
+      `);
+      for(const unit of desired){
+        maxPk++;
+        ins.run(
+          maxPk,unit.content_id,unit.stable_ref,reg.source_id,observedRevision,
+          unit.unit_type,unit.position_ordinal,unit.heading_path??null,
+          unit.content_text,unit.content_hash,unit.provenance_locator,ts,ts
+        );
+      }
+
+      const {byUpper,matcher}=identityMatcher(db);
+      if(matcher){
+        const relIns=db.prepare(`
+          INSERT OR IGNORE INTO v2_condition_links(
+            relation_id,subject_ref,predicate,object_ref,relation_class,
+            provenance_source_id,provenance_content_ref,provenance_locator,
+            state,subject_in_corpus,object_in_corpus,active,created_at,updated_at
+          ) VALUES(?,?,?,?,?,?,?,?,?,1,?,1,?,?)
+        `);
+        for(const unit of desired){
+          matcher.lastIndex=0;
+          for(const m of unit.content_text.matchAll(matcher)){
+            const identity=byUpper.get(String(m[1]).toUpperCase());
+            const ref=identity?.code??String(m[1]);
+            if(ref===code) continue;
+            const relationId='relation-'+hash(
+              `${unit.stable_ref}|REFERENCES_IDENTITY|${ref}|explicit_reference`
+            ).slice(0,40);
+            relIns.run(
+              relationId,unit.stable_ref,'REFERENCES_IDENTITY',ref,
+              'explicit_content_reference',reg.source_id,unit.stable_ref,
+              unit.provenance_locator,'validated_derived',
+              identity?.in_corpus?1:0,ts,ts
+            );
+          }
+        }
+      }
+
+      db.prepare(`
+        UPDATE corpus_registry
+        SET body_present=1,updated_at=datetime('now')
+        WHERE sosl_code=? AND desired_presence='PRESENT' AND body_present=0
+      `).run(code);
+      db.exec("INSERT INTO v2_content_fts(v2_content_fts) VALUES('rebuild')");
+      db.exec('COMMIT');
+    } catch(error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+
+    const readback=Number(db.prepare(
+      'SELECT COUNT(*) AS n FROM v2_content_units WHERE source_id=? AND active=1'
+    ).get(reg.source_id).n);
+    if(readback!==desired.length) {
+      throw new Error(`${code}: MATERIALIZATION_READBACK_FAILED ${readback}!=${desired.length}`);
+    }
+    const registryBody=Number(db.prepare(
+      'SELECT body_present AS n FROM corpus_registry WHERE sosl_code=?'
+    ).get(code).n);
+    const integrity=db.prepare('PRAGMA integrity_check').get().integrity_check;
+    const fk=db.prepare('PRAGMA foreign_key_check').all().length;
+    const ftsOrphans=Number(db.prepare(`
+      SELECT COUNT(*) AS n FROM v2_content_fts f
+      LEFT JOIN v2_content_units u ON u.content_pk=f.rowid
+      WHERE u.content_pk IS NULL
+    `).get().n);
+    if(registryBody!==1||integrity!=='ok'||fk!==0||ftsOrphans!==0){
+      throw new Error(`${code}: MATERIALIZATION_POSTVALIDATION_FAILED`);
+    }
+    return {
+      ok:true,mode:'MATERIALIZED',active_units:readback,
+      revision:observedRevision,integrity_check:integrity,
+      foreign_key_violations:fk,fts_orphans:ftsOrphans
+    };
+  } finally {
+    db.close();
+  }
+}
