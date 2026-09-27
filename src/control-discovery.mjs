@@ -248,6 +248,9 @@ export async function discoverExecutionPlan(
       manifest_spreadsheet_id:
         db.manifest_spreadsheet_id,
 
+      registry_spreadsheet_id:
+        db.registry_spreadsheet_id,
+
       publication_mode:
         db.publication_mode,
 
