@@ -1,0 +1,140 @@
+name: Local materialization path proof
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/materialization-path-proof.yml"
+      - "scripts/body-sync-local.mjs"
+      - "src/local-v2-updater-core.mjs"
+      - "src/live-source-model.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      SOSL_DATABASE_ID: gil-main
+      SOSL_BODY_SYNC_REPORT: work/body-sync-report.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Download stable snapshot readonly
+        shell: bash
+        run: |
+          mkdir -p work/outer work/inner
+          SOSL_SNAPSHOT_DOWNLOAD_PATH=work/snapshot-bundle.zip \
+            node scripts/download-stable-snapshot.mjs
+          unzip -q work/snapshot-bundle.zip -d work/outer
+          unzip -q work/outer/GIL_SQLITE_SNAPSHOT_CURRENT.zip -d work/inner
+          DB="$(find work/inner -type f \( -name '*.db' -o -name '*.sqlite' \) | head -n 1)"
+          test -n "$DB"
+          cp "$DB" work/materialization.db
+          echo "SOSL_SQLITE_PATH=$PWD/work/materialization.db" >> "$GITHUB_ENV"
+
+      - name: Prepare current cutover state locally
+        run: |
+          python3 scripts/local_snapshot_sanitizer.py apply --db "$SOSL_SQLITE_PATH"
+          node scripts/registry-apply-v0.1.mjs
+
+      - name: Remove only TESTV2I01 body from local copy
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, sqlite3
+          db=os.environ["SOSL_SQLITE_PATH"]
+          c=sqlite3.connect(db)
+          c.execute("PRAGMA foreign_keys=ON")
+          row=c.execute("""
+            SELECT source_id FROM corpus_registry
+            WHERE sosl_code='TESTV2I01'
+              AND desired_presence='PRESENT'
+              AND state='INACTIVE'
+              AND body_present=1
+          """).fetchone()
+          assert row is not None
+          sid=row[0]
+          c.execute("BEGIN IMMEDIATE")
+          try:
+            c.execute("DELETE FROM v2_condition_links WHERE provenance_source_id=?",(sid,))
+            c.execute("DELETE FROM v2_content_units WHERE source_id=?",(sid,))
+            c.execute("DELETE FROM v2_source_revisions WHERE source_id=?",(sid,))
+            c.execute("DELETE FROM v2_sync_state WHERE source_id=?",(sid,))
+            c.execute("DELETE FROM v2_source_objects WHERE source_id=?",(sid,))
+            c.execute("""
+              UPDATE corpus_registry
+              SET body_present=0,updated_at=datetime('now')
+              WHERE sosl_code='TESTV2I01'
+            """)
+            c.execute("INSERT INTO v2_content_fts(v2_content_fts) VALUES('rebuild')")
+            c.commit()
+          except:
+            c.rollback()
+            raise
+          assert c.execute("""
+            SELECT body_present FROM corpus_registry WHERE sosl_code='TESTV2I01'
+          """).fetchone()[0]==0
+          assert c.execute("""
+            SELECT COUNT(*) FROM v2_source_objects WHERE sosl_code='TESTV2I01'
+          """).fetchone()[0]==0
+          c.close()
+          print("LOCAL_FIXTURE_BODY_REMOVED")
+          PY
+
+      - name: Re-materialize through the production body synchronizer
+        run: node scripts/body-sync-local.mjs
+
+      - name: Validate materialized body and revision
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, sqlite3
+          db=os.environ["SOSL_SQLITE_PATH"]
+          c=sqlite3.connect(db)
+          body=c.execute("""
+            SELECT body_present FROM corpus_registry WHERE sosl_code='TESTV2I01'
+          """).fetchone()[0]
+          source=c.execute("""
+            SELECT source_id FROM v2_source_objects
+            WHERE sosl_code='TESTV2I01' AND active=1
+          """).fetchone()
+          assert body==1
+          assert source is not None
+          sid=source[0]
+          units=c.execute("""
+            SELECT COUNT(*) FROM v2_content_units
+            WHERE source_id=? AND active=1
+          """,(sid,)).fetchone()[0]
+          marker=c.execute("""
+            SELECT COUNT(*) FROM v2_content_units
+            WHERE source_id=? AND active=1
+              AND content_text LIKE '%PROVA DELTA LOCAL%'
+          """,(sid,)).fetchone()[0]
+          rev=c.execute("""
+            SELECT last_processed_revision,last_sync_status
+            FROM v2_sync_state WHERE source_id=?
+          """,(sid,)).fetchone()
+          assert units>0
+          assert marker>0
+          assert str(rev[0]).startswith('drive-version:')
+          assert rev[1]=='verified_live'
+          assert c.execute("PRAGMA integrity_check").fetchone()[0]=='ok'
+          assert len(c.execute("PRAGMA foreign_key_check").fetchall())==0
+          print("LOCAL_MATERIALIZATION_PROOF_OK",{
+            "units":units,"marker":marker,"revision":rev[0]
+          })
+          c.close()
+          PY
