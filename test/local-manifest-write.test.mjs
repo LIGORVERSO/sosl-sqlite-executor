@@ -11,7 +11,7 @@ test("manifest writer commits ESTADO_GLOBAL and FONTES in one Sheets batchUpdate
         ok:true,
         async json(){return {sheets:[
           {properties:{sheetId:11,title:"ESTADO_GLOBAL",gridProperties:{rowCount:100,columnCount:4}}},
-          {properties:{sheetId:22,title:"FONTES",gridProperties:{rowCount:500,columnCount:14}}}
+          {properties:{sheetId:22,title:"FONTES",gridProperties:{rowCount:500,columnCount:16}}}
         ]};}
       };
     }
@@ -22,7 +22,7 @@ test("manifest writer commits ESTADO_GLOBAL and FONTES in one Sheets batchUpdate
     assert.equal(body.requests[0].updateCells.range.sheetId,11);
     assert.equal(body.requests[1].updateCells.range.sheetId,22);
     assert.equal(body.requests[0].updateCells.range.endColumnIndex,4);
-    assert.equal(body.requests[1].updateCells.range.endColumnIndex,14);
+    assert.equal(body.requests[1].updateCells.range.endColumnIndex,16);
     assert.equal(body.requests[0].updateCells.rows[0].values[0].userEnteredValue.stringValue,"campo");
     assert.equal(body.requests[1].updateCells.rows[0].values[0].userEnteredValue.stringValue,"codigo_logico");
     return {ok:true,async json(){return {replies:[{},{}]};}};
@@ -38,8 +38,8 @@ test("manifest writer commits ESTADO_GLOBAL and FONTES in one Sheets batchUpdate
         "codigo_logico","drive_file_id","nome_drive","modified_time_drive",
         "drive_revision","desired_presence","state","body_present",
         "db_processed_revision","db_sync_status","membership_revision",
-        "registry_updated_at","estado_sync","meta_error"
-      ],["A","id","name","time","drive-version:1","PRESENT","ACTIVE","1","drive-version:1","verified","r","u","OK",""]]
+        "registry_updated_at","estado_sync","meta_error","ultima_verificacao","observacao"
+      ],["A","id","name","time","drive-version:1","PRESENT","ACTIVE","1","drive-version:1","verified","r","u","OK","","2026-09-27T00:00:00Z",""]]
     }
   });
   assert.deepEqual(result,{ok:true,request_count:2});
