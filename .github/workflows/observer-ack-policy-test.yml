@@ -10,7 +10,10 @@ on:
       - "apps-script/observer-v0.2.0/Code.gs"
       - "src/corpus-registry.js"
       - "src/corpus-reconciler.js"
-      - "test/corpus-registry.test.mjs"
+      - "test/corpus-registry.test.mjs test/retirement-lifecycle.test.mjs"
+      - "src/corpus-retirement.js"
+      - "src/retirement-guard.js"
+      - "test/retirement-lifecycle.test.mjs"
       - ".github/workflows/observer-ack-policy-test.yml"
   workflow_dispatch:
 
