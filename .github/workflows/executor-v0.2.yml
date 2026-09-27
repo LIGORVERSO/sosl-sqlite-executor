@@ -1,0 +1,103 @@
+name: SOSL SQLite executor v0.2
+
+on:
+  workflow_dispatch:
+    inputs:
+      database_id:
+        description: Database ID from GIL_SQLITE_CONTROLE_EXECUCAO
+        required: true
+        type: string
+      observer_contract:
+        description: Observer contract
+        required: false
+        type: string
+      trigger_reason:
+        description: Aggregated dirty reason
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sosl-sqlite-executor-${{ inputs.database_id }}
+  cancel-in-progress: false
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      SOSL_DATABASE_ID: ${{ inputs.database_id }}
+      SOSL_OBSERVER_CONTRACT: ${{ inputs.observer_contract }}
+      SOSL_TRIGGER_REASON: ${{ inputs.trigger_reason }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install parser dependencies
+        shell: bash
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Download current snapshot readonly
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { createSign } from "node:crypto";
+          import { writeFile } from "node:fs/promises";
+          const c=JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+          const b64=v=>Buffer.from(v).toString("base64url");
+          const now=Math.floor(Date.now()/1000);
+          const h=b64(JSON.stringify({alg:"RS256",typ:"JWT"}));
+          const cl=b64(JSON.stringify({
+            iss:c.client_email,
+            scope:"https://www.googleapis.com/auth/drive.readonly",
+            aud:"https://oauth2.googleapis.com/token",
+            iat:now,
+            exp:now+3600
+          }));
+          const u=h+"."+cl;
+          const s=createSign("RSA-SHA256"); s.update(u); s.end();
+          const a=u+"."+s.sign(c.private_key).toString("base64url");
+          const tr=await fetch("https://oauth2.googleapis.com/token",{
+            method:"POST",
+            headers:{"content-type":"application/x-www-form-urlencoded"},
+            body:new URLSearchParams({
+              grant_type:"urn:ietf:params:oauth:grant-type:jwt-bearer",
+              assertion:a
+            })
+          });
+          const tb=await tr.json();
+          if (!tr.ok || !tb.access_token) throw new Error("token failed");
+          const r=await fetch(
+            "https://www.googleapis.com/drive/v3/files/1b5ecjJH1r0Johag1f25GjxJrJLUyn1HF?alt=media",
+            {headers:{authorization:"Bearer "+tb.access_token}}
+          );
+          if (!r.ok) throw new Error("snapshot download failed: "+r.status);
+          await writeFile("snapshot-bundle.zip",new Uint8Array(await r.arrayBuffer()));
+          NODE
+
+      - name: Unpack snapshot
+        shell: bash
+        run: |
+          mkdir -p work/outer work/inner
+          unzip -q snapshot-bundle.zip -d work/outer
+          unzip -q work/outer/GIL_SQLITE_SNAPSHOT_CURRENT.zip -d work/inner
+          DB="$(find work/inner -type f \( -name '*.db' -o -name '*.sqlite' \) | head -n 1)"
+          test -n "$DB"
+          cp "$DB" work/executor.db
+          echo "SOSL_SQLITE_PATH=$PWD/work/executor.db" >> "$GITHUB_ENV"
+
+      - name: Apply live deltas locally
+        shell: bash
+        run: node scripts/executor-v0.2.mjs
