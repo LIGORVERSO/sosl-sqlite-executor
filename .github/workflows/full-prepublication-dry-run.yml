@@ -9,6 +9,8 @@ on:
       - "src/live-krg1.mjs"
       - "scripts/registry-apply-v0.1.mjs"
       - "scripts/executor-v0.2.mjs"
+      - "scripts/body-sync-local.mjs"
+      - "src/local-v2-updater-core.mjs"
       - "scripts/local_snapshot_sanitizer.py"
       - "scripts/build_snapshot_bundle.py"
       - "scripts/publish-snapshot-v0.1.mjs"
@@ -27,6 +29,7 @@ jobs:
       SOSL_DATABASE_ID: gil-main
       SOSL_TRIGGER_REASON: SOURCE_CHANGED
       SOSL_EXECUTOR_REPORT: work/executor-report.json
+      SOSL_BODY_SYNC_REPORT: work/body-sync-report.json
       SOSL_MANIFEST_REPORT: work/manifest-report.json
       SOSL_BUNDLE_PATH: work/GIL_SQLITE_SNAPSHOT_CURRENT.next.zip
       SOSL_BUILD_REPORT: work/build-report.json
@@ -73,8 +76,8 @@ jobs:
       - name: Reconcile live KRG1 registry and derived control locally
         run: node scripts/registry-apply-v0.1.mjs
 
-      - name: Apply all currently discoverable body deltas locally
-        run: node scripts/executor-v0.2.mjs
+      - name: Materialize and synchronize every KRG1-present body locally
+        run: node scripts/body-sync-local.mjs
 
       - name: Rebuild manifest from live authority and local SQLite
         run: node scripts/manifest-preview-v0.1.mjs
@@ -109,7 +112,6 @@ jobs:
         run: |
           python3 scripts/build_snapshot_bundle.py \
             --db "$SOSL_SQLITE_PATH" \
-            --executor-report "$SOSL_EXECUTOR_REPORT" \
             --report-out work/build-report.json \
             --out work/GIL_SQLITE_SNAPSHOT_CURRENT.next.zip
 
@@ -121,5 +123,5 @@ jobs:
           test -s work/GIL_SQLITE_SNAPSHOT_CURRENT.next.zip
           test -s work/build-report.json
           test -s work/manifest-report.json
-          test -s work/executor-report.json
+          test -s work/body-sync-report.json
           test -s work/publish-dry-run.json
