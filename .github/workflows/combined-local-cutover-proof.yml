@@ -6,6 +6,7 @@ on:
     paths:
       - "scripts/local_snapshot_sanitizer.py"
       - "scripts/executor-v0.2.mjs"
+      - "scripts/build_snapshot_bundle.py"
       - ".github/workflows/combined-local-cutover-proof.yml"
   workflow_dispatch:
 
@@ -20,6 +21,7 @@ jobs:
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       SOSL_DATABASE_ID: gil-main
       SOSL_TRIGGER_REASON: SOURCE_CHANGED
+      SOSL_EXECUTOR_REPORT: work/executor-report.json
     steps:
       - uses: actions/checkout@v4
         with:
@@ -112,3 +114,15 @@ jobs:
           })
           c.close()
           PY
+
+      - name: Build self-certifying snapshot bundle locally
+        run: |
+          python3 scripts/build_snapshot_bundle.py \
+            --db "$SOSL_SQLITE_PATH" \
+            --executor-report "$SOSL_EXECUTOR_REPORT" \
+            --out work/GIL_SQLITE_SNAPSHOT_CURRENT.next.zip
+
+      - name: Assert publication was not attempted
+        run: |
+          test -s work/GIL_SQLITE_SNAPSHOT_CURRENT.next.zip
+          test -s "$SOSL_EXECUTOR_REPORT"
