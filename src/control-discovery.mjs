@@ -94,7 +94,7 @@ function classifySource(row) {
     state === "INACTIVE" &&
     body === "1" &&
     sync === "RETIRADA_PENDENTE_CORPO" &&
-    name.startsWith("ARQ_")
+    name.startsWith("RETIRAR_")
   ) return "ARCHIVED_RETIREMENT_AUTHORIZED";
 
   if (
