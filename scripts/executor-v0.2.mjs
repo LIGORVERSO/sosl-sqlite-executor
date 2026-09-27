@@ -83,7 +83,11 @@ function selectDatabase(plan,databaseId) {
 
 const databaseId=String(process.env.SOSL_DATABASE_ID || "").trim();
 const dbPath=String(process.env.SOSL_SQLITE_PATH || "").trim();
+const triggerReason=String(process.env.SOSL_TRIGGER_REASON || "").trim();
 if (!databaseId || !dbPath) throw new Error("SOSL_DATABASE_ID and SOSL_SQLITE_PATH required");
+if (/REGISTRY_CHANGED/.test(triggerReason)) {
+  throw new Error("REGISTRY_CHANGED_BLOCKED_UNTIL_LOCAL_CORPUS_RECONCILER");
+}
 
 const token=await googleAccessToken([
   "https://www.googleapis.com/auth/drive.readonly",
@@ -177,7 +181,7 @@ console.log(JSON.stringify({
   contract:"sosl_sqlite_executor_v0.2.0",
   database_id:databaseId,
   observer_contract:process.env.SOSL_OBSERVER_CONTRACT || null,
-  trigger_reason:process.env.SOSL_TRIGGER_REASON || null,
+  trigger_reason:triggerReason || null,
   candidate_count:candidates.length,
   results,
   integrity_check:integrity,
