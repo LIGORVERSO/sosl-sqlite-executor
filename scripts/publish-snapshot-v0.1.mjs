@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { discoverExecutionPlan } from "../src/control-discovery.mjs";
 import {
   googleAccessTokenFromServiceAccountJson,
+  googleFetchWithRetry,
   readSheetValues,
   driveFileMeta
 } from "../src/google-readonly.mjs";
@@ -44,7 +45,10 @@ async function downloadBytes(fileId,token){
     "https://www.googleapis.com/drive/v3/files/"+
     encodeURIComponent(fileId)+
     "?alt=media&supportsAllDrives=true";
-  const r=await fetch(url,{headers:{authorization:"Bearer "+token}});
+  const r=await googleFetchWithRetry(
+    url,
+    {headers:{authorization:"Bearer "+token}}
+  );
   if(!r.ok) throw new Error("SNAPSHOT_READBACK_DOWNLOAD_FAILED "+r.status);
   return new Uint8Array(await r.arrayBuffer());
 }
@@ -155,15 +159,14 @@ const readbackHash=hash(readback);
 if(readback.length!==bytes.length||readbackHash!==packageHash){
   throw new Error("SNAPSHOT_READBACK_BYTES_MISMATCH");
 }
-const stableAfterReadback=await driveFileMeta(database.snapshot_drive_file_id,token);
+let stableAfterReadback=await driveFileMeta(database.snapshot_drive_file_id,token);
 if(String(stableAfterReadback.version)!==String(uploaded.version)){
-  throw new Error("SNAPSHOT_VERSION_CHANGED_DURING_READBACK");
+  const secondReadback=await downloadBytes(database.snapshot_drive_file_id,token);
+  if(secondReadback.length!==bytes.length||hash(secondReadback)!==packageHash){
+    throw new Error("SNAPSHOT_VERSION_CHANGED_DURING_READBACK_WITH_DIFFERENT_BYTES");
+  }
 }
 
-const liveAfterUpload=await loadLiveKrg1({
-  spreadsheetId:database.registry_spreadsheet_id,
-  accessToken:token
-});
 const publishedAt=new Date().toISOString();
 const meta=buildReport.meta??{};
 const snapshotInfo={
@@ -180,52 +183,84 @@ const snapshotInfo={
   integrity_check:String(meta.integrity_check??""),
   counts:meta.counts??{}
 };
-const manifest=await buildLocalManifest({
-  dbPath,
-  intent:liveAfterUpload.intent,
-  liveKrg1Revision:liveAfterUpload.revision,
-  driveToken:token,
-  snapshot:snapshotInfo
-});
-await writeManifestAtomic({
-  spreadsheetId:database.manifest_spreadsheet_id,
-  manifest,
-  accessToken:token
-});
 
-const globalReadback=kv(await readSheetValues(
-  database.manifest_spreadsheet_id,
-  "ESTADO_GLOBAL!A1:D100",
-  token
-));
-if(String(globalReadback.snapshot_package_sha256)!==packageHash){
-  throw new Error("MANIFEST_READBACK_PACKAGE_HASH_MISMATCH");
-}
-if(String(globalReadback.snapshot_version)!==String(stableAfterReadback.version)){
-  throw new Error("MANIFEST_READBACK_DRIVE_VERSION_MISMATCH");
-}
-if(String(globalReadback.snapshot_krg1_membership_revision)!==String(controlState.processed_revision)){
-  throw new Error("MANIFEST_READBACK_KRG1_REVISION_MISMATCH");
-}
-if(!["PUBLISHED_CURRENT","DIRTY"].includes(String(globalReadback.snapshot_status))){
-  throw new Error("MANIFEST_READBACK_STATUS_INVALID");
-}
+let stableFinal=stableAfterReadback;
+let globalReadback=null;
+let liveAfterUpload=null;
+let manifestStatus=null;
+let converged=false;
 
-const stableFinal=await driveFileMeta(database.snapshot_drive_file_id,token);
-if(String(stableFinal.version)!==String(stableAfterReadback.version)){
-  const dirtyManifest=structuredClone(manifest);
-  const statusRow=dirtyManifest.global_values.find(r=>r?.[0]==="snapshot_status");
-  if(statusRow){
-    statusRow[1]="DIRTY";
-    statusRow[2]="DELTA";
-    statusRow[3]="Snapshot Drive mudou durante o commit do manifesto; novo ciclo obrigatório.";
-  }
-  await writeManifestAtomic({
-    spreadsheetId:database.manifest_spreadsheet_id,
-    manifest:dirtyManifest,
+for(let attempt=1;attempt<=4;attempt++){
+  liveAfterUpload=await loadLiveKrg1({
+    spreadsheetId:database.registry_spreadsheet_id,
     accessToken:token
   });
-  throw new Error("SNAPSHOT_VERSION_CHANGED_AFTER_MANIFEST");
+  if(String(controlState.processed_revision)!==String(liveAfterUpload.revision)){
+    throw new Error("KRG1_CHANGED_AFTER_SNAPSHOT_UPLOAD");
+  }
+
+  snapshotInfo.drive_version=String(stableFinal.version);
+  const manifest=await buildLocalManifest({
+    dbPath,
+    intent:liveAfterUpload.intent,
+    liveKrg1Revision:liveAfterUpload.revision,
+    driveToken:token,
+    snapshot:snapshotInfo
+  });
+  await writeManifestAtomic({
+    spreadsheetId:database.manifest_spreadsheet_id,
+    manifest,
+    accessToken:token
+  });
+
+  globalReadback=kv(await readSheetValues(
+    database.manifest_spreadsheet_id,
+    "ESTADO_GLOBAL!A1:D100",
+    token
+  ));
+  if(String(globalReadback.snapshot_package_sha256)!==packageHash){
+    throw new Error("MANIFEST_READBACK_PACKAGE_HASH_MISMATCH");
+  }
+  if(String(globalReadback.snapshot_version)!==String(stableFinal.version)){
+    throw new Error("MANIFEST_READBACK_DRIVE_VERSION_MISMATCH");
+  }
+  if(String(globalReadback.snapshot_krg1_membership_revision)!==String(controlState.processed_revision)){
+    throw new Error("MANIFEST_READBACK_KRG1_REVISION_MISMATCH");
+  }
+  if(!["PUBLISHED_CURRENT","DIRTY"].includes(String(globalReadback.snapshot_status))){
+    throw new Error("MANIFEST_READBACK_STATUS_INVALID");
+  }
+  manifestStatus=String(globalReadback.snapshot_status);
+
+  const afterManifest=await driveFileMeta(database.snapshot_drive_file_id,token);
+  if(String(afterManifest.version)===String(stableFinal.version)){
+    stableFinal=afterManifest;
+    converged=true;
+    break;
+  }
+
+  const finalBytes=await downloadBytes(database.snapshot_drive_file_id,token);
+  if(finalBytes.length!==bytes.length||hash(finalBytes)!==packageHash){
+    const dirtyManifest=structuredClone(manifest);
+    const statusRow=dirtyManifest.global_values.find(r=>r?.[0]==="snapshot_status");
+    if(statusRow){
+      statusRow[1]="DIRTY";
+      statusRow[2]="DELTA";
+      statusRow[3]="Snapshot Drive mudou para conteúdo diferente durante o commit do manifesto.";
+    }
+    await writeManifestAtomic({
+      spreadsheetId:database.manifest_spreadsheet_id,
+      manifest:dirtyManifest,
+      accessToken:token
+    });
+    throw new Error("SNAPSHOT_CHANGED_AFTER_MANIFEST_WITH_DIFFERENT_BYTES");
+  }
+
+  stableFinal=afterManifest;
+}
+
+if(!converged){
+  throw new Error("SNAPSHOT_VERSION_DID_NOT_STABILIZE_AFTER_IDENTICAL_CONTENT_RECHECK");
 }
 
 const out={
@@ -235,7 +270,7 @@ const out={
   manifest_write_attempted:true,
   stable_after_version:String(stableFinal.version),
   readback_sha256:readbackHash,
-  manifest_snapshot_status:String(globalReadback.snapshot_status),
+  manifest_snapshot_status:manifestStatus,
   live_krg1_after_upload:liveAfterUpload.revision,
   snapshot_krg1_membership_revision:String(controlState.processed_revision),
   published_at:publishedAt
