@@ -65,7 +65,15 @@ function classify({code,intent,row,meta,processedRevision,controlState}){
       : "CONTROLE_DERIVADO_DELTA";
   }
 
-  if(!intent) return "LEGADO_REVISAR";
+  if(!intent) {
+    if(
+      row &&
+      s(row.desired_presence)==="PRESENT" &&
+      s(row.state)==="INACTIVE" &&
+      Number(row.body_present)===1
+    ) return "CONGELADO_DIVERGENCIA_REGISTRAL";
+    return "LEGADO_REVISAR";
+  }
   if(desired==="ABSENT") return body===1?"RETIRADA_PENDENTE_CORPO":"RETIRADO";
   if(desired==="PRESENT"&&state==="INACTIVE"){
     return body===1?"CONGELADO_OK":"CONGELADO_SEM_CORPO";
