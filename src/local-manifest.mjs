@@ -87,6 +87,10 @@ function classify({code,intent,row,meta,processedRevision,controlState}){
 }
 
 function isMaterialDelta({status,desired,state,body,liveRevision,processedRevision}){
+  if(
+    status==="CONGELADO_DIVERGENCIA_REGISTRAL" ||
+    status==="CONGELADO_OK"
+  ) return false;
   const directDirty=new Set([
     "ERRO_METADATA","ERRO_TRASHED","ERRO_KRG1_CORPUS_ANCHOR",
     "ERRO_CONTROLE_DERIVADO_AUSENTE","CONTROLE_DERIVADO_DELTA",
