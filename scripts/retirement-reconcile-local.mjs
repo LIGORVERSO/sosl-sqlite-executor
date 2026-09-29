@@ -137,8 +137,6 @@ try {
     });
   }
 
-  }
-
   console.log(JSON.stringify({
     contract:"sosl_local_retirement_reconcile_v0.1.0",
     ok:true,
