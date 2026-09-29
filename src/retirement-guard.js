@@ -1,5 +1,5 @@
 export const RETIREMENT_HOLD_MS = 2 * 60 * 1000;
-export const RETIREMENT_PREFIX = "RETIRAR_";
+export const RETIREMENT_PREFIX = "ARQ_";
 
 export function retirementDueAt(armedAt){
   const value=Number(armedAt);
