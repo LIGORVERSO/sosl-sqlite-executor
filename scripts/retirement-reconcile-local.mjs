@@ -72,35 +72,38 @@ try {
     const now=Date.now();
 
     if(!existing){
+      const armedAt=prefixPresent?now:null;
+      const dueAt=prefixPresent?now+RETIREMENT_HOLD_MS:null;
       db.prepare(`
         INSERT INTO corpus_retirement_guard_state(
           sosl_code,drive_file_id,registry_absent_seen_at_ms,last_prefix_present,
           prefix_preexisting,armed_at_ms,due_at_ms,last_observed_name,updated_at
-        ) VALUES(?,?,?,?,?,NULL,NULL,?,datetime('now'))
+        ) VALUES(?,?,?,?,?,?,?,?,datetime('now'))
       `).run(
-        reg.sosl_code,reg.drive_file_id,now,prefixPresent?1:0,prefixPresent?1:0,currentName
+        reg.sosl_code,reg.drive_file_id,now,prefixPresent?1:0,0,
+        armedAt,dueAt,currentName
       );
       results.push({
         code:reg.sosl_code,
-        mode:prefixPresent?"PREFIX_PREEXISTING_BLOCKED":"AWAITING_PREFIX"
+        mode:prefixPresent?"HOLDING":"AWAITING_PREFIX",
+        due_at_ms:dueAt
       });
       continue;
     }
 
     const lastPrefix=Number(existing.last_prefix_present)===1;
-    let preexisting=Number(existing.prefix_preexisting)===1;
     let armedAt=existing.armed_at_ms==null?null:Number(existing.armed_at_ms);
     let dueAt=existing.due_at_ms==null?null:Number(existing.due_at_ms);
 
-    if(preexisting && !prefixPresent){
-      preexisting=false; armedAt=null; dueAt=null;
-    } else if(!preexisting && !lastPrefix && prefixPresent){
-      armedAt=now; dueAt=now+RETIREMENT_HOLD_MS;
-    } else if(armedAt && !prefixPresent){
-      armedAt=null; dueAt=null;
+    if(!prefixPresent){
+      armedAt=null;
+      dueAt=null;
+    } else if(!lastPrefix || !armedAt || !dueAt){
+      armedAt=now;
+      dueAt=now+RETIREMENT_HOLD_MS;
     }
 
-    if(armedAt && dueAt && now>=dueAt && prefixPresent && !preexisting){
+    if(armedAt && dueAt && now>=dueAt && prefixPresent){
       const confirm=await driveFileMeta(reg.drive_file_id,token);
       if(String(confirm.name||"").startsWith(RETIREMENT_PREFIX)){
         const upd=db.prepare(`
@@ -114,23 +117,26 @@ try {
         results.push({code:reg.sosl_code,mode:"PROMOTED_RETIRING",hold_ms:RETIREMENT_HOLD_MS});
         continue;
       }
-      armedAt=null; dueAt=null;
+      armedAt=null;
+      dueAt=null;
     }
 
     db.prepare(`
       UPDATE corpus_retirement_guard_state
-      SET drive_file_id=?,last_prefix_present=?,prefix_preexisting=?,armed_at_ms=?,
+      SET drive_file_id=?,last_prefix_present=?,prefix_preexisting=0,armed_at_ms=?,
           due_at_ms=?,last_observed_name=?,updated_at=datetime('now')
       WHERE sosl_code=?
     `).run(
-      reg.drive_file_id,prefixPresent?1:0,preexisting?1:0,
+      reg.drive_file_id,prefixPresent?1:0,
       armedAt,dueAt,currentName,reg.sosl_code
     );
     results.push({
       code:reg.sosl_code,
-      mode:preexisting?"PREFIX_PREEXISTING_BLOCKED":armedAt?"HOLDING":"AWAITING_PREFIX",
+      mode:armedAt?"HOLDING":"AWAITING_PREFIX",
       due_at_ms:dueAt
     });
+  }
+
   }
 
   console.log(JSON.stringify({
