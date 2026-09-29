@@ -49,15 +49,14 @@ async function safeDriveMeta(fileId,token,fetchImpl=fetch){
 }
 
 function classify({code,intent,row,meta,processedRevision,controlState}){
-  if(meta?.error) return "ERRO_METADATA";
-  if(meta?.trashed) return "ERRO_TRASHED";
-
   const desired=s(intent?.desired_presence??row?.desired_presence);
   const state=s(intent?.state??row?.state);
   const body=Number(row?.body_present??0);
   const live=meta?.version ? "drive-version:"+s(meta.version) : "";
 
   if(code==="KRG1"){
+    if(meta?.error) return "ERRO_METADATA";
+    if(meta?.trashed) return "ERRO_TRASHED";
     if(row) return "ERRO_KRG1_CORPUS_ANCHOR";
     if(!controlState) return "ERRO_CONTROLE_DERIVADO_AUSENTE";
     return live && live===s(controlState.processed_revision)
@@ -74,6 +73,8 @@ function classify({code,intent,row,meta,processedRevision,controlState}){
     ) return "CONGELADO_DIVERGENCIA_REGISTRAL";
     return "LEGADO_REVISAR";
   }
+  if(meta?.error) return "ERRO_METADATA";
+  if(meta?.trashed) return "ERRO_TRASHED";
   if(desired==="ABSENT") return body===1?"RETIRADA_PENDENTE_CORPO":"RETIRADO";
   if(desired==="PRESENT"&&state==="INACTIVE"){
     return body===1?"CONGELADO_OK":"CONGELADO_SEM_CORPO";
