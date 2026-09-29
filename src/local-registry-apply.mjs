@@ -11,10 +11,6 @@ function foreignKeysAndIntegrity(db){
 
 export function applyCorpusRegistryPlanLocal({dbPath,reconciliation}) {
   const diagnostics=reconciliation?.diagnostics??[];
-  if(diagnostics.length){
-    throw new Error("REGISTRY_PLAN_DIAGNOSTICS_BLOCK_APPLY "+JSON.stringify(diagnostics));
-  }
-
   const db=new DatabaseSync(dbPath);
   const counts={NOOP:0,UPSERT:0,DELETE:0};
   try {
@@ -101,7 +97,7 @@ export function applyCorpusRegistryPlanLocal({dbPath,reconciliation}) {
     }
 
     const validation=foreignKeysAndIntegrity(db);
-    return {ok:true,counts,...validation};
+    return {ok:true,counts,diagnostics,...validation};
   } finally {
     db.close();
   }
