@@ -23,9 +23,6 @@ const liveKrg1=await loadLiveKrg1({
   spreadsheetId:database.registry_spreadsheet_id,
   accessToken:token
 });
-if(liveKrg1.intent.invalid_commands.length){
-  throw new Error("KRG1_INVALID_COMMANDS "+JSON.stringify(liveKrg1.intent.invalid_commands));
-}
 const manifest=await buildLocalManifest({
   dbPath,
   intent:liveKrg1.intent,
