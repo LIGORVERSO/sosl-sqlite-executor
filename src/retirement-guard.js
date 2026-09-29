@@ -1,5 +1,5 @@
 export const RETIREMENT_HOLD_MS = 2 * 60 * 1000;
-export const RETIREMENT_PREFIX = "RETIRAR_";
+export const RETIREMENT_PREFIX = "ARQ_";
 
 export function retirementDueAt(armedAt){
   const value=Number(armedAt);
@@ -18,8 +18,8 @@ export function canArmRetirement({
 }){
   const r=Number(registrySeenAt), p=Number(physicalEventAt);
   if(desiredPresence!=="ABSENT"||state!=="INACTIVE")return false;
-  if(!Number.isFinite(r)||!Number.isFinite(p)||p<=r)return false;
-  if(preexistingPrefix===true||watchCovered!==true)return false;
+  if(!Number.isFinite(r)||!Number.isFinite(p)||r<=0||p<=0)return false;
+  if(watchCovered!==true)return false;
   return true;
 }
 

@@ -9,6 +9,19 @@ function sourceByCode(rows) {
   return new Map((rows??[]).map(row=>[String(row.sosl_code),row]));
 }
 
+function freezeAction(current,reason) {
+  if(!current) return null;
+  const frozen={
+    ...current,
+    desired_presence:"PRESENT",
+    state:"INACTIVE"
+  };
+  if(sameRow(current,frozen)) {
+    return {kind:"NOOP",sosl_code:current.sosl_code,reason:"LOCAL_FREEZE_"+reason};
+  }
+  return {kind:"UPSERT",row:frozen,reason:"LOCAL_FREEZE_"+reason};
+}
+
 export function planCorpusReconciliation({intent,currentRegistry,currentSources,metadataByCode=new Map(),adapterForMime,incomingRelationsByCode=new Map()}) {
   const registryByCode=sourceByCode(currentRegistry);
   const bodiesByCode=sourceByCode(currentSources);
@@ -18,11 +31,15 @@ export function planCorpusReconciliation({intent,currentRegistry,currentSources,
 
   for(const invalid of intent.invalid_commands??[]) {
     diagnostics.push({kind:"INVALID_COMMAND_PRESERVED",sosl_code:invalid.sosl_code,reason:invalid.reason,entra:invalid.entra,status:invalid.status});
+    const freeze=freezeAction(registryByCode.get(invalid.sosl_code)??null,"INVALID_COMMAND");
+    if(freeze) actions.push(freeze);
   }
 
   for(const current of currentRegistry??[]) {
     if(intentByCode.has(current.sosl_code)||invalidByCode.has(current.sosl_code)) continue;
     diagnostics.push({kind:"KRG1_ROW_MISSING_PRESERVED",sosl_code:current.sosl_code});
+    const freeze=freezeAction(current,"KRG1_ROW_MISSING");
+    if(freeze) actions.push(freeze);
   }
 
   for(const entry of intent.entries) {
@@ -31,10 +48,14 @@ export function planCorpusReconciliation({intent,currentRegistry,currentSources,
 
     if(current&&String(current.drive_file_id)!==entry.drive_file_id) {
       diagnostics.push({kind:"LOCATOR_CHANGE_PRESERVED",sosl_code:entry.sosl_code,old_drive_file_id:String(current.drive_file_id),new_drive_file_id:entry.drive_file_id});
+      const freeze=freezeAction(current,"LOCATOR_CHANGE");
+      if(freeze) actions.push(freeze);
       continue;
     }
     if(body&&String(body.drive_file_id)!==entry.drive_file_id) {
       diagnostics.push({kind:"BODY_LOCATOR_CHANGE_PRESERVED",sosl_code:entry.sosl_code,old_drive_file_id:String(body.drive_file_id),new_drive_file_id:entry.drive_file_id});
+      const freeze=freezeAction(current,"BODY_LOCATOR_CHANGE");
+      if(freeze) actions.push(freeze);
       continue;
     }
 
@@ -59,6 +80,8 @@ export function planCorpusReconciliation({intent,currentRegistry,currentSources,
     const adapter=String(current?.adapter??body?.source_format??(metadata?adapterForMime(String(metadata.mime_type??"")):"")).trim();
     if(!adapter) {
       diagnostics.push({kind:"ADAPTER_MISSING_PRESERVED",sosl_code:entry.sosl_code});
+      const freeze=freezeAction(current,"ADAPTER_MISSING");
+      if(freeze) actions.push(freeze);
       continue;
     }
 

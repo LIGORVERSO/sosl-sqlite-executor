@@ -58,6 +58,13 @@ jobs:
       - name: Install parser dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
 
+      - name: Validate localized freeze contract
+        run: |
+          node --check scripts/registry-apply-v0.1.mjs
+          node --check scripts/retirement-reconcile-local.mjs
+          node --check scripts/body-sync-local.mjs
+          node scripts/localized-freeze-selftest.mjs
+
       - name: Enforce live activation control before any Drive mutation
         run: node scripts/executor-activation-guard.mjs
 

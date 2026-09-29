@@ -60,6 +60,7 @@ try{
     LEFT JOIN v2_source_objects s ON s.source_id=r.source_id AND s.active=1
     LEFT JOIN v2_sync_state ss ON ss.source_id=r.source_id
     WHERE r.desired_presence='PRESENT'
+      AND r.state='ACTIVE'
     ORDER BY r.sosl_code
   `).all().map(r=>({
     code:String(r.sosl_code),
@@ -170,7 +171,7 @@ let remaining,integrity,fk,ftsOrphans;
 try{
   remaining=Number(verify.prepare(`
     SELECT COUNT(*) AS n FROM corpus_registry
-    WHERE desired_presence='PRESENT' AND body_present=0
+    WHERE desired_presence='PRESENT' AND state='ACTIVE' AND body_present=0
   `).get().n);
   integrity=String(verify.prepare("PRAGMA integrity_check").get().integrity_check);
   fk=verify.prepare("PRAGMA foreign_key_check").all().length;
