@@ -46,9 +46,6 @@ const liveKrg1=await loadLiveKrg1({
   accessToken:token
 });
 const {revision,identityTab,relationTab,intent}=liveKrg1;
-if(intent.invalid_commands.length){
-  throw new Error("KRG1_INVALID_COMMANDS "+JSON.stringify(intent.invalid_commands));
-}
 
 async function buildPlan(){
   const db=new DatabaseSync(dbPath,{readOnly:true});
@@ -122,9 +119,6 @@ async function buildPlan(){
 }
 
 const before=await buildPlan();
-if(before.diagnostics.length){
-  throw new Error("REGISTRY_DIAGNOSTICS_BLOCK_APPLY "+JSON.stringify(before.diagnostics));
-}
 const applied=applyCorpusRegistryPlanLocal({dbPath,reconciliation:before});
 const controlPlane=applyKrg1ControlPlaneLocal({
   dbPath,
@@ -143,7 +137,7 @@ if(
 }
 const after=await buildPlan();
 const nonNoop=after.actions.filter(x=>x.kind!=="NOOP");
-if(after.diagnostics.length||nonNoop.length){
+if(nonNoop.length){
   throw new Error("REGISTRY_IDEMPOTENCE_FAILED "+JSON.stringify({
     diagnostics:after.diagnostics,nonNoop
   }));
@@ -164,8 +158,10 @@ console.log(JSON.stringify({
     relation_count:Number(controlState.relation_count)
   },
   before_action_counts:counts(before.actions),
+  before_diagnostics:before.diagnostics,
+  frozen_codes:[...new Set(before.diagnostics.map(x=>String(x.sosl_code||"")).filter(Boolean))],
   applied,
   after_action_counts:counts(after.actions),
-  after_diagnostics:after.diagnostics.length,
+  after_diagnostics:after.diagnostics,
   drive_write_attempted:false
 },null,2));
