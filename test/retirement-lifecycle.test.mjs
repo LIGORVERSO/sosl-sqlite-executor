@@ -12,7 +12,7 @@ import {
   canDeleteRegistryTombstone
 } from "../src/corpus-retirement.js";
 
-test("retirement requires a later physical event and rejects preexisting prefix",()=>{
+test("retirement accepts a preexisting ARQ_ prefix under NAO+INATIVO while preserving guards",()=>{
   assert.equal(canArmRetirement({
     desiredPresence:"ABSENT",state:"INACTIVE",
     registrySeenAt:1000,physicalEventAt:2000,
@@ -22,7 +22,7 @@ test("retirement requires a later physical event and rejects preexisting prefix"
     desiredPresence:"ABSENT",state:"INACTIVE",
     registrySeenAt:1000,physicalEventAt:2000,
     preexistingPrefix:true,watchCovered:true
-  }),false);
+  }),true);
   assert.equal(expectedRetirementName("ABC"),RETIREMENT_PREFIX+"ABC");
 });
 
