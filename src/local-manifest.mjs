@@ -48,7 +48,14 @@ async function safeDriveMeta(fileId,token,fetchImpl=fetch){
   };
 }
 
-function classify({code,intent,row,meta,processedRevision,controlState}){
+export function requiresDriveMetadata({code,intent,row}){
+  if(code==="KRG1") return true;
+  const desired=s(intent?.desired_presence??row?.desired_presence);
+  const body=Number(row?.body_present??0);
+  return !(intent && desired==="ABSENT" && body===0);
+}
+
+export function classifyManifestSource({code,intent,row,meta,processedRevision,controlState}){
   const desired=s(intent?.desired_presence??row?.desired_presence);
   const state=s(intent?.state??row?.state);
   const body=Number(row?.body_present??0);
@@ -63,6 +70,8 @@ function classify({code,intent,row,meta,processedRevision,controlState}){
       ? "CONTROLE_DERIVADO_OK"
       : "CONTROLE_DERIVADO_DELTA";
   }
+
+  if(intent && desired==="ABSENT" && body===0) return "RETIRADO";
 
   if(!intent) {
     if(
@@ -155,7 +164,17 @@ export async function buildLocalManifest({
   for(let i=0;i<items.length;i+=20){
     const chunk=items.slice(i,i+20);
     metadata.push(...await Promise.all(
-      chunk.map(x=>safeDriveMeta(x.fileId,driveToken,fetchImpl).then(meta=>({...x,meta})))
+      chunk.map(async x=>{
+        const row=registryByCode.get(x.code)??null;
+        if(!requiresDriveMetadata({code:x.code,intent:x.intent,row})){
+          return {...x,meta:{
+            id:x.fileId,name:"",mime_type:"",version:"",modified_time:"",
+            trashed:false,error:null,skipped_reason:"ABSENT_WITHOUT_BODY"
+          }};
+        }
+        const meta=await safeDriveMeta(x.fileId,driveToken,fetchImpl);
+        return {...x,meta};
+      })
     ));
   }
 
@@ -191,7 +210,7 @@ export async function buildLocalManifest({
     const membershipRevision=code==="KRG1"
       ? s(controlState?.processed_revision)
       : s(row?.membership_source_revision);
-    const status=classify({
+    const status=classifyManifestSource({
       code,intent:entry,row,meta:item.meta,
       processedRevision,controlState
     });
